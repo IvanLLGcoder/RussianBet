@@ -69,6 +69,13 @@ export function MarketPage({
     return () => observer.disconnect();
   }, [detail !== null]);
 
+  // Arrivée depuis un bouton « Oui / Non » d'une carte (?o=) sur téléphone : on va droit au ticket.
+  useEffect(() => {
+    if (!detail || !new URLSearchParams(window.location.search).has('o')) return;
+    if (!window.matchMedia('(max-width: 1080px)').matches) return;
+    window.setTimeout(() => ticketRef.current?.scrollIntoView({ block: 'start' }), 50);
+  }, [detail !== null, id]);
+
   useEffect(() => {
     let active = true;
     request<MarketDetail>(`/api/markets/${encodeURIComponent(id)}`)

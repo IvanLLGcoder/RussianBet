@@ -68,6 +68,7 @@
 html, body { margin: 0; }
 body { background: var(--bg); min-height: 100vh; }
 body.modal-open { overflow: hidden; }
+a, button { -webkit-tap-highlight-color: transparent; touch-action: manipulation; }
 a { color: inherit; text-decoration: none; }
 button, input, select, textarea { font: inherit; color: inherit; }
 button { cursor: pointer; background: none; border: 0; padding: 0; }
@@ -529,6 +530,7 @@ button.outcome-no:hover:not(:disabled) { background: var(--no); color: #fff; }
   background: rgba(8, 12, 18, 0.55); backdrop-filter: blur(3px); animation: fade 0.15s ease-out;
 }
 @keyframes fade { from { opacity: 0; } }
+@keyframes sheet { from { transform: translateY(40px); opacity: 0.4; } }
 @keyframes rise { from { opacity: 0; transform: translateY(10px) scale(0.98); } }
 .modal {
   position: relative; width: min(440px, 100%); max-height: calc(100vh - 40px); overflow-y: auto; padding: 26px;
@@ -640,6 +642,25 @@ button.outcome-no:hover:not(:disabled) { background: var(--no); color: #fff; }
   .mobile-tabs .active { color: var(--primary); }
   .toasts { bottom: 84px; left: 12px; }
   .market-page { padding-bottom: 160px; }
+  /* Téléphone : l'en-tête défile avec la page pour laisser l'écran au contenu ; la barre du bas suffit à naviguer. */
+  .topbar { position: relative; }
+  .mobile-ticket { scroll-margin-top: 16px; }
+  /* 16 px minimum : iOS ne zoome plus sur le champ au focus. */
+  input, textarea, select, .search input { font-size: 16px; }
+  /* Cibles tactiles confortables. */
+  .segmented-small button { padding: 9px 12px; }
+  .chart-ranges { justify-content: space-between; }
+  .chart-ranges button { flex: 1; padding: 9px 0; font-size: 13px; }
+  .user-menu [data-mobile-hidden] { display: none; }
+  /* Modales en feuille montante, boutons toujours atteignables. */
+  .modal-backdrop { place-items: end stretch; padding: 0; }
+  .modal {
+    width: 100%; max-height: 92dvh; border-radius: 20px 20px 0 0; padding: 22px 18px calc(18px + env(safe-area-inset-bottom));
+    animation: sheet 0.22s ease-out;
+  }
+  .modal-wide { width: 100%; }
+  .form-actions { position: sticky; bottom: calc(-18px - env(safe-area-inset-bottom)); margin: 6px -18px 0; padding: 12px 18px calc(12px + env(safe-area-inset-bottom)); background: var(--surface); border-top: 1px solid var(--border); }
+  .form-actions .btn { flex: 1; height: 46px; }
   .mobile-buy-bar {
     display: flex; gap: 8px; position: fixed; left: 0; right: 0; z-index: 44; padding: 10px 12px;
     bottom: calc(58px + env(safe-area-inset-bottom)); background: color-mix(in srgb, var(--bg) 94%, transparent);
@@ -650,7 +671,9 @@ button.outcome-no:hover:not(:disabled) { background: var(--no); color: #fff; }
   .market-meta .meta-actions { margin-left: auto; }
 }
 @media (max-width: 600px) {
-  .grid { grid-template-columns: 1fr; }
+  .grid { grid-template-columns: 1fr; gap: 12px; }
+  .market-card { min-height: 0; gap: 12px; padding: 14px; }
+  .market-card-head h3 { font-size: 15px; }
   .market-header h1 { font-size: 21px; }
   .outcome-table-head, .outcome-table-row { grid-template-columns: minmax(0, 1fr) 64px 110px; }
   .outcome-table-row strong { font-size: 18px; }

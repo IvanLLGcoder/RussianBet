@@ -123,8 +123,9 @@ function UserMenu({
     return () => document.removeEventListener('mousedown', close);
   }, [open]);
 
-  const item = (icon: React.ReactNode, label: string, action: () => void) => (
-    <button role="menuitem" onClick={() => { setOpen(false); action(); }}>{icon}{label}</button>
+  // Les entrées déjà présentes dans la barre du bas sont masquées sur téléphone.
+  const item = (icon: React.ReactNode, label: string, action: () => void, mobileHidden = false) => (
+    <button role="menuitem" data-mobile-hidden={mobileHidden || undefined} onClick={() => { setOpen(false); action(); }}>{icon}{label}</button>
   );
 
   return (
@@ -139,8 +140,8 @@ function UserMenu({
             <Avatar name={user.username} size={36} />
             <div><strong>{user.username}</strong><small>{credits(user.balance)} disponibles</small></div>
           </div>
-          {item(<WalletMinimal size={16} />, 'Portefeuille', () => navigate('/portfolio'))}
-          {item(<Trophy size={16} />, 'Classement', () => navigate('/leaderboard'))}
+          {item(<WalletMinimal size={16} />, 'Portefeuille', () => navigate('/portfolio'), true)}
+          {item(<Trophy size={16} />, 'Classement', () => navigate('/leaderboard'), true)}
           {item(<UserRoundPlus size={16} />, 'Inviter des amis', onInvite)}
           {item(<Bell size={16} />, 'Notifications', onNotifications)}
           {item(theme === 'dark' ? <Sun size={16} /> : <Moon size={16} />, theme === 'dark' ? 'Mode clair' : 'Mode sombre', onTheme)}
