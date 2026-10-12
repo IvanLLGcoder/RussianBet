@@ -196,7 +196,7 @@ export function Header({
   const onHome = route.name === 'home';
 
   return (
-    <header className="topbar">
+    <header className={`topbar${onHome ? '' : ' topbar-inner'}`}>
       <div className="topbar-row">
         <a className="brand" {...linkProps('/')} aria-label={`${brand.name}, accueil`}>
           <Logo size={30} />
@@ -216,7 +216,6 @@ export function Header({
               <b>{credits(user.balance)}</b>
             </a>
             <button className="btn btn-primary btn-create" onClick={onCreate}><Plus size={16} /> <span>Créer</span></button>
-            <button className="icon-btn bell" aria-label="Notifications" onClick={onNotifications}><Bell size={18} /></button>
             <UserMenu
               user={user}
               theme={theme}
@@ -229,7 +228,7 @@ export function Header({
           </div>
         ) : (
           <div className="topbar-actions">
-            <button className="icon-btn" aria-label="Changer de thème" onClick={onTheme}>{theme === 'dark' ? <Sun size={18} /> : <Moon size={18} />}</button>
+            <button className="icon-btn theme-toggle" aria-label="Changer de thème" onClick={onTheme}>{theme === 'dark' ? <Sun size={18} /> : <Moon size={18} />}</button>
             <button className="btn btn-text" onClick={() => onAuth('login')}>Connexion</button>
             <button className="btn btn-primary" onClick={() => onAuth('register')}>Inscription</button>
           </div>

@@ -1,5 +1,5 @@
 import { ArrowRight, BadgeCheck, LineChart, Wallet } from 'lucide-react';
-import { Gauge } from '../components/Bits';
+import { Gauge, MarketIcon } from '../components/Bits';
 import { Wordmark } from '../components/Logo';
 
 // Page d'accueil des visiteurs : l'API des marchés est réservée aux membres, on montre donc un aperçu statique.
@@ -12,7 +12,6 @@ export function Landing({ onAuth }: { onAuth: (mode: 'login' | 'register') => vo
   return (
     <main className="page landing">
       <section className="landing-hero">
-        <span className="landing-kicker">Marché de prédiction · sur invitation</span>
         <h1>Misez sur ce que <span>pense la bande.</span></h1>
         <p><Wordmark /> transforme vos débats en marchés. Achetez l’issue à laquelle vous croyez, suivez les probabilités en direct, encaissez si vous aviez raison.</p>
         <div className="landing-actions">
@@ -23,7 +22,7 @@ export function Landing({ onAuth }: { onAuth: (mode: 'login' | 'register') => vo
       <section className="landing-preview" aria-hidden="true">
         {sample.map((market) => (
           <div className="market-card market-card-static" key={market.title}>
-            <div className="market-card-head"><span className="market-icon market-icon-community" style={{ width: 40, height: 40 }} /><h3>{market.title}</h3><Gauge probability={market.chance} /></div>
+            <div className="market-card-head"><MarketIcon market={{ category: 'Community' }} /><h3>{market.title}</h3><Gauge probability={market.chance} /></div>
             <div className="market-card-binary">
               <span className="outcome-button outcome-yes"><span className="outcome-button-label">Oui</span><span className="outcome-button-price">{Math.round(market.chance * 100)}¢</span></span>
               <span className="outcome-button outcome-no"><span className="outcome-button-label">Non</span><span className="outcome-button-price">{100 - Math.round(market.chance * 100)}¢</span></span>

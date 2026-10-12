@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { CheckCircle2, Clock3, Info, LockKeyhole, Undo2 } from 'lucide-react';
+import { CheckCircle2, Clock3, LockKeyhole, Undo2 } from 'lucide-react';
 import type { Market, User } from '../api';
 import { cents, credits, isBinary, marketState, outcomeColor, payout, signed } from '../format';
 
@@ -35,7 +35,6 @@ export function TradePanel({
   const validStake = Number.isSafeInteger(stake) && stake >= 1 && stake <= Math.min(100_000, user?.balance ?? 0);
   const odds = market.optionStats[selected]?.odds ?? 1;
   const toWin = validStake ? payout(stake, odds) : 0;
-  const shares = validStake ? stake * odds : 0;
 
   function bump(value: number | 'max') {
     setReviewing(false);
@@ -111,11 +110,9 @@ export function TradePanel({
           <span>{credits(bet.amount)} à {cents(bet.odds)}</span>
         </div>
         <dl className="ticket-summary">
-          <div><dt>Cote verrouillée</dt><dd>{bet.odds.toLocaleString('fr-FR')}</dd></div>
           <div><dt>Gain si victoire</dt><dd className="text-yes">{credits(payout(bet.amount, bet.odds))}</dd></div>
         </dl>
-        <p className="ticket-note"><LockKeyhole size={13} /> Une seule prise par marché : votre position est définitive jusqu’à la résolution.</p>
-        {state === 'awaiting' && <p className="ticket-note"><Clock3 size={13} /> Les prises sont closes, le marché attend son résultat.</p>}
+        <p className="ticket-note">{state === 'awaiting' ? <><Clock3 size={13} /> Prises closes, en attente du résultat.</> : <><LockKeyhole size={13} /> Position définitive jusqu’à la résolution.</>}</p>
       </div>
     );
   } else if (state === 'awaiting') {
@@ -157,8 +154,6 @@ export function TradePanel({
 
         {validStake && (
           <dl className="ticket-summary">
-            <div><dt>Prix moyen</dt><dd>{cents(odds)}</dd></div>
-            <div><dt>Parts</dt><dd>{shares.toLocaleString('fr-FR', { maximumFractionDigits: 2 })}</dd></div>
             <div className="ticket-win">
               <dt>Gain potentiel</dt>
               <dd>{credits(toWin)} <small>{signed(toWin - stake)} ({Math.round(((toWin - stake) / stake) * 100)} %)</small></dd>
@@ -171,7 +166,7 @@ export function TradePanel({
 
         {reviewing && validStake && (
           <div className="ticket-review" role="status">
-            Acheter <b>{market.options[selected]}</b> pour <b>{credits(stake)}</b>. La cote est verrouillée au moment de l’ordre et la position ne pourra plus être modifiée.
+            <b>{credits(stake)}</b> sur <b>{market.options[selected]}</b> : une seule prise par marché, elle ne pourra plus être modifiée.
           </div>
         )}
         <div className="ticket-actions">
@@ -186,13 +181,7 @@ export function TradePanel({
 
   return (
     <aside className="ticket" aria-label="Passer un ordre">
-      <div className="ticket-tabs">
-        <button className="active">Acheter</button>
-        <button disabled title="Les positions sont définitives jusqu’à la résolution">Vendre</button>
-        <span className="ticket-type">Marché</span>
-      </div>
       <div className="ticket-body">{body}</div>
-      <p className="ticket-footer"><Info size={12} /> Crédits virtuels sans valeur monétaire.</p>
     </aside>
   );
 }

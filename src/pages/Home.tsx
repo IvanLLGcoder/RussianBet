@@ -7,10 +7,11 @@ import type { Feed } from '../components/Chrome';
 import { MarketCard, marketPath } from '../components/MarketCard';
 import { PriceChart } from '../components/PriceChart';
 import { cents, categoryLabels, chances, compactCredits, credits, isBinary, marketState, outcomeColor, percent, timeAgo, timeLeft } from '../format';
+import { useCompact } from '../hooks';
 import { linkProps, navigate } from '../router';
 
 type Status = 'active' | 'awaiting' | 'resolved' | 'all';
-type Sort = 'volume' | 'new' | 'ending' | 'traders';
+type Sort = 'volume' | 'new' | 'ending';
 
 const feedTitles: Record<string, string> = {
   trending: 'Tendances',
@@ -100,11 +101,9 @@ export function Home({
   onCreate: () => void;
 }) {
   const [status, setStatus] = useState<Status>('active');
-  const [sort, setSort] = useState<Sort>(sortForFeed(feed));
   const [activity, setActivity] = useState<FeedEntry[]>([]);
 
   useEffect(() => {
-    setSort(sortForFeed(feed));
     setStatus('active');
   }, [feed]);
 
@@ -117,6 +116,8 @@ export function Home({
     return () => { active = false; };
   }, [markets]);
 
+  const compact = useCompact();
+  const sort = sortForFeed(feed);
   const needle = query.trim().toLowerCase();
   const isCategory = !['trending', 'new', 'ending'].includes(feed);
   const visible = markets
@@ -132,11 +133,10 @@ export function Home({
     .sort((first, second) => {
       if (sort === 'new') return Date.parse(second.createdAt) - Date.parse(first.createdAt);
       if (sort === 'ending') return Date.parse(first.endsAt) - Date.parse(second.endsAt);
-      if (sort === 'traders') return second.bettorsCount - first.bettorsCount;
       return second.totalStaked - first.totalStaked || second.bettorsCount - first.bettorsCount;
     });
 
-  const featured = feed === 'trending' && !needle && status === 'active' ? visible[0] : undefined;
+  const featured = !compact && feed === 'trending' && !needle && status === 'active' ? visible[0] : undefined;
   const awaitingCount = markets.filter((market) => marketState(market, now) === 'awaiting').length;
 
   return (
@@ -153,7 +153,7 @@ export function Home({
 
       <section className="board">
         <div className="board-head">
-          <h1>{needle ? `Résultats pour « ${query.trim()} »` : feedTitles[feed] ?? categoryLabels[feed]}</h1>
+          <h1 className={needle ? 'board-title-search' : ''}>{needle ? `Résultats pour « ${query.trim()} »` : feedTitles[feed] ?? categoryLabels[feed]}</h1>
           <div className="board-filters">
             {feed !== 'ending' && (
               <div className="segmented segmented-small" role="tablist" aria-label="Statut">
@@ -167,15 +167,6 @@ export function Home({
                 ))}
               </div>
             )}
-            <label className="select">
-              <span>Trier par</span>
-              <select value={sort} onChange={(event) => setSort(event.target.value as Sort)}>
-                <option value="volume">Volume</option>
-                <option value="traders">Participants</option>
-                <option value="new">Plus récents</option>
-                <option value="ending">Clôture proche</option>
-              </select>
-            </label>
           </div>
         </div>
 

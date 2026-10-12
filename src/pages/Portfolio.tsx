@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { UserRoundPlus, WalletMinimal } from 'lucide-react';
+import { WalletMinimal } from 'lucide-react';
 import type { Market, User } from '../api';
 import { MarketIcon } from '../components/Bits';
 import { marketPath } from '../components/MarketCard';
@@ -12,7 +12,7 @@ export function positionValue(market: Market) {
   return Math.round(payout(market.myBet.amount, market.myBet.odds) * chances(market)[market.myBet.choiceIndex]);
 }
 
-export function Portfolio({ user, markets, now, onInvite }: { user: User; markets: Market[]; now: number; onInvite: () => void }) {
+export function Portfolio({ user, markets, now }: { user: User; markets: Market[]; now: number }) {
   const [tab, setTab] = useState<'positions' | 'history'>('positions');
   const mine = markets.filter((market) => market.myBet);
   const open = mine.filter((market) => ['open', 'awaiting'].includes(marketState(market, now)));
@@ -23,27 +23,17 @@ export function Portfolio({ user, markets, now, onInvite }: { user: User; market
 
   return (
     <main className="page portfolio">
-      <section className="summary-cards">
-        <div className="summary-card summary-main">
+      <section className="summary">
+        <div className="summary-total">
           <span><WalletMinimal size={16} /> Portefeuille</span>
           <strong>{credits(user.balance + openValue)}</strong>
           <small className={pnl >= 0 ? 'text-yes' : 'text-no'}>{signed(pnl)} cr depuis l’inscription</small>
         </div>
-        <div className="summary-card">
-          <span>Solde disponible</span>
-          <strong>{credits(user.balance)}</strong>
-          <small>{credits(openStakes)} engagés</small>
-        </div>
-        <div className="summary-card">
-          <span>Positions ouvertes</span>
-          <strong>{open.length}</strong>
-          <small>Valeur actuelle {credits(openValue)}</small>
-        </div>
-        <button className="summary-card summary-invite" onClick={onInvite}>
-          <UserRoundPlus size={20} />
-          <strong>Inviter des amis</strong>
-          <small>Partagez un lien d’invitation</small>
-        </button>
+        <dl className="summary-stats">
+          <div><dt>Disponible</dt><dd>{credits(user.balance)}</dd></div>
+          <div><dt>En jeu</dt><dd>{credits(openStakes)}</dd></div>
+          <div><dt>Valeur actuelle</dt><dd>{credits(openValue)}</dd></div>
+        </dl>
       </section>
 
       <div className="tabs" role="tablist">
@@ -55,7 +45,7 @@ export function Portfolio({ user, markets, now, onInvite }: { user: User; market
         open.length === 0 ? <p className="muted table-empty">Aucune position ouverte. <a {...linkProps('/')}>Parcourir les marchés</a></p> : (
           <div className="table-wrap">
             <table className="table">
-              <thead><tr><th>Marché</th><th>Moy. → Actuel</th><th>Mise</th><th>Valeur</th><th>Gain si victoire</th></tr></thead>
+              <thead><tr><th>Marché</th><th className="col-optional">Moy. → Actuel</th><th className="col-optional">Mise</th><th>Valeur</th><th>Si gagné</th></tr></thead>
               <tbody>
                 {open.map((market) => {
                   const bet = market.myBet!;
@@ -68,8 +58,8 @@ export function Portfolio({ user, markets, now, onInvite }: { user: User; market
                           <span>{market.title}<small><b style={{ color: outcomeColor(market, bet.choiceIndex) }}>{market.options[bet.choiceIndex]}</b>{marketState(market, now) === 'awaiting' && ' · en attente du résultat'}</small></span>
                         </a>
                       </td>
-                      <td>{cents(bet.odds)} → {cents(market.optionStats[bet.choiceIndex].odds)}</td>
-                      <td>{credits(bet.amount)}</td>
+                      <td className="col-optional">{cents(bet.odds)} → {cents(market.optionStats[bet.choiceIndex].odds)}</td>
+                      <td className="col-optional">{credits(bet.amount)}</td>
                       <td>{credits(value)} <small className={value >= bet.amount ? 'text-yes' : 'text-no'}>{signed(value - bet.amount)}</small></td>
                       <td className="text-yes">{credits(payout(bet.amount, bet.odds))}</td>
                     </tr>

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { ArrowLeft, CalendarClock, Check, Link2, Pencil, TrendingDown, TrendingUp, Undo2, UsersRound } from 'lucide-react';
 import { request } from '../api';
 import type { Comment, Market, MarketDetail, MarketValues, User } from '../api';
@@ -8,7 +8,7 @@ import { MarketFormModal } from '../components/Modals';
 import { PriceChart } from '../components/PriceChart';
 import { TradePanel } from '../components/TradePanel';
 import {
-  cents, categoryLabels, chances, compactCredits, credits, dateTime, isBinary, marketState, outcomeColor, payout, percent, seriesColor, shortDate, timeAgo,
+  cents, categoryLabels, chances, compactCredits, credits, dateTime, isBinary, marketState, outcomeColor, payout, percent, seriesColor, shortDate, timeAgo, timeLeft,
 } from '../format';
 import { linkProps } from '../router';
 
@@ -57,6 +57,17 @@ export function MarketPage({
   const [tab, setTab] = useState<Tab>('comments');
   const [editing, setEditing] = useState(false);
   const [reload, setReload] = useState(0);
+  const ticketRef = useRef<HTMLDivElement>(null);
+  const [ticketVisible, setTicketVisible] = useState(false);
+
+  // Barre d'achat collée en bas sur téléphone, masquée quand le ticket est déjà à l'écran.
+  useEffect(() => {
+    const element = ticketRef.current;
+    if (!element) return;
+    const observer = new IntersectionObserver(([entry]) => setTicketVisible(entry.isIntersecting), { threshold: 0.2 });
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, [detail !== null]);
 
   useEffect(() => {
     let active = true;
@@ -99,6 +110,12 @@ export function MarketPage({
   const isCreator = user?.id === market.creatorId;
   const refresh = () => setReload((value) => value + 1);
 
+  function openTicket(index: number) {
+    setSelected(index);
+    ticketRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    window.setTimeout(() => ticketRef.current?.querySelector('input')?.focus({ preventScroll: true }), 350);
+  }
+
   async function copyLink() {
     try {
       await navigator.clipboard.writeText(window.location.origin + window.location.pathname);
@@ -123,7 +140,7 @@ export function MarketPage({
               <div className="market-meta">
                 <span><b>{credits(market.totalStaked)}</b> Vol.</span>
                 <span><UsersRound size={14} /> {market.bettorsCount} participant{market.bettorsCount > 1 ? 's' : ''}</span>
-                <span><CalendarClock size={14} /> {shortDate(market.endsAt)}</span>
+                <span><CalendarClock size={14} /> {state === 'open' ? `Clôture dans ${timeLeft(market.endsAt, now)}` : shortDate(market.endsAt)}</span>
                 <span className="meta-actions">
                   <button className="icon-btn" title="Copier le lien" aria-label="Copier le lien" onClick={() => void copyLink()}><Link2 size={16} /></button>
                   {isCreator && state !== 'resolved' && state !== 'cancelled' && (
@@ -173,7 +190,7 @@ export function MarketPage({
             </section>
           )}
 
-          <div className="mobile-ticket">
+          <div className="mobile-ticket" ref={ticketRef}>
             <TradePanel
               market={market}
               user={user}
@@ -185,24 +202,35 @@ export function MarketPage({
             />
           </div>
 
-          <section className="rules">
-            <h2>Règles</h2>
-            <p>{market.description || `Ce marché se résout selon l’issue réelle de la question « ${market.title} ».`}</p>
-            <dl>
-              <div><dt>Clôture des prises</dt><dd>{dateTime(market.endsAt)}</dd></div>
-              <div><dt>Créé par</dt><dd>@{market.creator} · {shortDate(market.createdAt)}</dd></div>
-              <div><dt>Résolution</dt><dd>Par n’importe quel membre, à tout moment. La première résolution est définitive.</dd></div>
-            </dl>
-          </section>
+          {state === 'open' && !market.myBet && !ticketVisible && (
+            <div className="mobile-buy-bar">
+              {binary ? market.options.map((option, index) => (
+                <button key={option} className={`btn ${index === 0 ? 'btn-yes' : 'btn-no'}`} onClick={() => openTicket(index)}>
+                  {option} {cents(market.optionStats[index].odds)}
+                </button>
+              )) : (
+                <button className="btn btn-primary" onClick={() => openTicket(selected)}>
+                  Acheter « {market.options[selected]} » {cents(market.optionStats[selected].odds)}
+                </button>
+              )}
+            </div>
+          )}
 
           {(state === 'open' || state === 'awaiting') && user && (
             <ResolutionBox
               market={market}
+              open={state === 'awaiting'}
               isCreator={isCreator}
               onResolve={async (index) => { await onResolve(market, index); refresh(); }}
               onCancel={async () => { await onCancel(market); refresh(); }}
             />
           )}
+
+          <section className="rules">
+            <h2>Règles</h2>
+            <p>{market.description || `Ce marché se résout selon l’issue réelle de la question « ${market.title} ».`}</p>
+            <p className="rules-meta">Clôture le {dateTime(market.endsAt)} · créé par @{market.creator} le {shortDate(market.createdAt)}</p>
+          </section>
 
           <section className="tabs-section">
             <div className="tabs" role="tablist">
@@ -280,11 +308,13 @@ export function MarketPage({
 
 function ResolutionBox({
   market,
+  open,
   isCreator,
   onResolve,
   onCancel,
 }: {
   market: Market;
+  open: boolean;
   isCreator: boolean;
   onResolve: (index: number) => Promise<void>;
   onCancel: () => Promise<void>;
@@ -308,9 +338,9 @@ function ResolutionBox({
   }
 
   return (
-    <section className="resolution">
-      <h2>Résoudre le marché</h2>
-      <p className="muted">Choisissez l’issue qui s’est réalisée. Les gagnants sont payés immédiatement et la décision est définitive.</p>
+    <details className="resolution" open={open}>
+      <summary><h2>Résoudre le marché</h2>{open && <span className="resolution-hint">Prises closes : quel est le résultat ?</span>}</summary>
+      <p className="muted">N’importe quel membre peut résoudre. Les gagnants sont payés aussitôt ; la décision est définitive.</p>
       <div className="chip-row">
         {market.options.map((option, index) => (
           <button key={option} className={`chip${choice === index ? ' active' : ''}`} onClick={() => { setChoice(index); setConfirming(null); }}>{option}</button>
@@ -337,7 +367,7 @@ function ResolutionBox({
           </>
         )}
       </div>
-    </section>
+    </details>
   );
 }
 

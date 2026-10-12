@@ -166,7 +166,7 @@ export default function App() {
         notify={notify}
       />
     );
-  } else if (route.name === 'portfolio') page = <Portfolio user={user} markets={markets} now={now} onInvite={() => setInviteOpen(true)} />;
+  } else if (route.name === 'portfolio') page = <Portfolio user={user} markets={markets} now={now} />;
   else if (route.name === 'leaderboard') page = <Leaderboard user={user} version={version} />;
   else page = <Home markets={markets} now={now} feed={feed} query={query} onCreate={openCreate} />;
 

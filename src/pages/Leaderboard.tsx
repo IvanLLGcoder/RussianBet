@@ -34,17 +34,17 @@ export function Leaderboard({ user, version }: { user: User; version: number }) 
       {error && <p className="form-error">{error}</p>}
       {leaders === null ? <div className="page-loading" /> : (
         <div className="table-wrap">
-          <table className="table leader-table">
-            <thead><tr><th>#</th><th>Membre</th><th>Gains</th><th>Volume</th><th>Paris gagnés</th><th>Solde</th></tr></thead>
+          <table className={`table leader-table metric-${metric}`}>
+            <thead><tr><th>#</th><th>Membre</th><th className="col-pnl">Gains</th><th className="col-volume">Volume</th><th className="col-wins">Paris gagnés</th><th className="col-balance">Solde</th></tr></thead>
             <tbody>
               {sorted.map((leader, index) => (
                 <tr key={leader.id} className={leader.id === user.id ? 'me' : ''}>
                   <td><span className={`rank rank-${index + 1}`}>{index + 1}</span></td>
                   <td><span className="leader-name"><Avatar name={leader.username} size={30} />{leader.username}{leader.id === user.id && <small>vous</small>}</span></td>
-                  <td className={leader.pnl >= 0 ? 'text-yes' : 'text-no'}>{signed(leader.pnl)} cr</td>
-                  <td>{credits(leader.volume)}</td>
-                  <td>{leader.wins} / {leader.positions}</td>
-                  <td>{credits(leader.balance)}</td>
+                  <td className={`col-pnl ${leader.pnl >= 0 ? 'text-yes' : 'text-no'}`}>{signed(leader.pnl)} cr</td>
+                  <td className="col-volume">{credits(leader.volume)}</td>
+                  <td className="col-wins">{leader.wins} / {leader.positions}</td>
+                  <td className="col-balance">{credits(leader.balance)}</td>
                 </tr>
               ))}
             </tbody>

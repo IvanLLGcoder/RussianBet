@@ -811,7 +811,7 @@ app.use('/api', (request, response) => response.status(404).json({ error: 'Route
 const buildDirectory = path.join(root, 'dist');
 if (fs.existsSync(buildDirectory)) {
   app.use(express.static(buildDirectory));
-  app.get('*path', (_request, response) => response.sendFile(path.join(buildDirectory, 'index.html')));
+  app.get('*path', (_request, response) => response.sendFile('index.html', { root: buildDirectory }));
 }
 
 app.listen(port, () => {

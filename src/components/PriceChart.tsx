@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { HistoryPoint, Market } from '../api';
 import brand from '../brand';
+import { useCompact } from '../hooks';
 import { chances, isBinary, marketState, seriesColor } from '../format';
 
 const ranges = [
@@ -35,7 +36,7 @@ export function PriceChart({
   market,
   history,
   now,
-  height = 300,
+  height: fullHeight = 300,
   showRanges = true,
 }: {
   market: Market;
@@ -44,6 +45,8 @@ export function PriceChart({
   height?: number;
   showRanges?: boolean;
 }) {
+  const compact = useCompact();
+  const height = compact ? Math.round(fullHeight * 0.62) : fullHeight;
   const containerRef = useRef<HTMLDivElement>(null);
   const [width, setWidth] = useState(640);
   const [range, setRange] = useState<RangeId>('ALL');
