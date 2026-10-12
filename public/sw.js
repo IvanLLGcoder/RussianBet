@@ -1,4 +1,5 @@
-const CACHE_NAME = 'niggabet-app-v1';
+// Change ce numéro à chaque déploiement qui modifie l'enveloppe de l'app.
+const CACHE_NAME = 'app-shell-v2';
 
 self.addEventListener('install', (event) => {
   event.waitUntil((async () => {
@@ -23,8 +24,9 @@ self.addEventListener('install', (event) => {
 self.addEventListener('activate', (event) => {
   event.waitUntil((async () => {
     const keys = await caches.keys();
+    // Supprime aussi les caches de l'ancienne version du site (autre préfixe).
     await Promise.all(keys
-      .filter((key) => key.startsWith('niggabet-app-') && key !== CACHE_NAME)
+      .filter((key) => key !== CACHE_NAME)
       .map((key) => caches.delete(key)));
     await self.clients.claim();
   })());
@@ -76,7 +78,7 @@ self.addEventListener('push', (event) => {
     icon: '/notification.svg',
     badge: '/notification.svg',
     tag: `${notification.type}-${notification.marketId}`,
-    data: { url: '/' },
+    data: { url: notification.marketId ? `/market/${encodeURIComponent(notification.marketId)}` : '/' },
   }));
 });
 
@@ -87,6 +89,7 @@ self.addEventListener('notificationclick', (event) => {
     for (const client of windows) {
       if ('focus' in client) {
         await client.focus();
+        if ('navigate' in client) await client.navigate(event.notification.data.url).catch(() => undefined);
         return;
       }
     }

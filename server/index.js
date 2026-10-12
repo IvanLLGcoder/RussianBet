@@ -9,6 +9,7 @@ import webPush from 'web-push';
 
 const directory = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(directory, '..');
+const brand = JSON.parse(fs.readFileSync(path.join(root, 'brand.config.json'), 'utf8'));
 const dataDirectory = path.join(root, 'data');
 fs.mkdirSync(dataDirectory, { recursive: true });
 
@@ -81,6 +82,20 @@ db.exec(`
   );
   CREATE INDEX IF NOT EXISTS idx_markets_status_ends ON markets(status, ends_at);
   CREATE INDEX IF NOT EXISTS idx_bets_market ON bets(market_id);
+`);
+
+// Ajouts de la refonte : uniquement de nouvelles tables et de nouveaux index,
+// pour que l'ancienne version puisse toujours tourner sur la même base.
+db.exec(`
+  CREATE TABLE IF NOT EXISTS market_comments (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    market_id TEXT NOT NULL REFERENCES markets(id) ON DELETE CASCADE,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    body TEXT NOT NULL,
+    created_at TEXT NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS idx_market_comments_market ON market_comments(market_id, created_at);
+  CREATE INDEX IF NOT EXISTS idx_bets_created ON bets(created_at);
 `);
 
 const marketColumns = db.pragma('table_info(markets)');
@@ -169,7 +184,7 @@ function getUser(request) {
 
 function requireUser(request, response, next) {
   request.user = getUser(request);
-  if (!request.user) return response.status(401).json({ error: 'Sign in to continue.' });
+  if (!request.user) return response.status(401).json({ error: 'Connectez-vous pour continuer.' });
   next();
 }
 
@@ -222,7 +237,7 @@ function notifyNewPoll(market, creatorId) {
     WHERE notification_preferences.new_polls = 1 AND push_subscriptions.user_id != ?
   `).all(creatorId);
   dispatchPushNotifications(subscriptions, {
-    title: 'A new poll is up',
+    title: 'Nouveau marché',
     body: market.title,
     marketId: market.id,
     type: 'new-poll',
@@ -239,7 +254,7 @@ function notifyPollResolved(marketId, title) {
     WHERE notification_preferences.participated_resolutions = 1 AND bets.market_id = ?
   `).all(marketId);
   dispatchPushNotifications(subscriptions, {
-    title: 'A poll you joined was resolved',
+    title: 'Un marché où vous avez une position est résolu',
     body: title,
     marketId,
     type: 'poll-resolved',
@@ -257,15 +272,15 @@ app.post('/api/auth/register', async (request, response) => {
   const password = typeof request.body.password === 'string' ? request.body.password : '';
   const inviteCode = typeof request.body.inviteCode === 'string' ? request.body.inviteCode.trim().toUpperCase() : '';
   if (!/^[a-zA-Z0-9_]{3,20}$/.test(username)) {
-    return response.status(400).json({ error: 'Username must be 3–20 letters, numbers, or underscores.' });
+    return response.status(400).json({ error: 'Le pseudo fait 3 à 20 caractères : lettres, chiffres ou _.' });
   }
   if (!/^\S+@\S+\.\S+$/.test(email) || email.length > 254) {
-    return response.status(400).json({ error: 'Enter a valid email address.' });
+    return response.status(400).json({ error: 'Adresse e-mail invalide.' });
   }
   if (password.length < 8 || password.length > 128) {
-    return response.status(400).json({ error: 'Password must be at least 8 characters.' });
+    return response.status(400).json({ error: 'Le mot de passe doit faire au moins 8 caractères.' });
   }
-  if (!inviteCode) return response.status(400).json({ error: 'An invitation code is required.' });
+  if (!inviteCode) return response.status(400).json({ error: 'Un code d’invitation est requis.' });
 
   try {
     const passwordHash = await bcrypt.hash(password, 10);
@@ -274,7 +289,7 @@ app.post('/api/auth/register', async (request, response) => {
       const invite = db.prepare(`
         SELECT code FROM invite_codes WHERE code = ? AND expires_at > ?
       `).get(inviteCode, now);
-      if (!invite) throw Object.assign(new Error('That invitation code is invalid or expired.'), { status: 400 });
+      if (!invite) throw Object.assign(new Error('Ce code d’invitation est invalide ou expiré.'), { status: 400 });
 
       const result = db.prepare(`
         INSERT INTO users (username, email, password_hash, balance, created_at)
@@ -292,10 +307,10 @@ app.post('/api/auth/register', async (request, response) => {
   } catch (error) {
     if (error.status) return response.status(error.status).json({ error: error.message });
     if (error.code === 'SQLITE_CONSTRAINT_UNIQUE') {
-      return response.status(409).json({ error: 'That username or email is already registered.' });
+      return response.status(409).json({ error: 'Ce pseudo ou cet e-mail est déjà utilisé.' });
     }
     console.error(error);
-    response.status(500).json({ error: 'Could not create your account.' });
+    response.status(500).json({ error: 'Impossible de créer votre compte.' });
   }
 });
 
@@ -307,7 +322,7 @@ app.post('/api/auth/login', async (request, response) => {
     WHERE username = ? COLLATE NOCASE OR email = ? COLLATE NOCASE
   `).get(identity, identity);
   if (!user || !(await bcrypt.compare(password, user.password_hash))) {
-    return response.status(401).json({ error: 'Those sign-in details did not match.' });
+    return response.status(401).json({ error: 'Identifiants incorrects.' });
   }
   setSession(response, user.id);
   response.json({ user: publicUser(user) });
@@ -336,7 +351,7 @@ app.get('/api/invites', requireUser, (request, response) => {
 app.post('/api/invites', requireUser, (request, response) => {
   const validForDays = Number(request.body.validForDays);
   if (![1, 7, 30].includes(validForDays)) {
-    return response.status(400).json({ error: 'Choose an invite duration of 1, 7, or 30 days.' });
+    return response.status(400).json({ error: 'Choisissez une durée de 1, 7 ou 30 jours.' });
   }
   const code = randomBytes(6).toString('hex').toUpperCase();
   const createdAt = new Date().toISOString();
@@ -367,7 +382,7 @@ app.get('/api/notifications/settings', requireUser, (request, response) => {
 app.put('/api/notifications/preferences', requireUser, (request, response) => {
   const { newPolls, participatedResolutions } = request.body;
   if (typeof newPolls !== 'boolean' || typeof participatedResolutions !== 'boolean') {
-    return response.status(400).json({ error: 'Set both notification preferences to true or false.' });
+    return response.status(400).json({ error: 'Les deux préférences doivent valoir true ou false.' });
   }
   db.prepare(`
     INSERT INTO notification_preferences (user_id, new_polls, participated_resolutions)
@@ -380,18 +395,18 @@ app.put('/api/notifications/preferences', requireUser, (request, response) => {
 
 app.post('/api/notifications/subscriptions', requireUser, (request, response) => {
   if (!pushEnabled) {
-    return response.status(503).json({ error: 'Browser push is not configured on this server.' });
+    return response.status(503).json({ error: 'Les notifications push ne sont pas configurées sur ce serveur.' });
   }
   const { endpoint, keys } = request.body;
   let parsedEndpoint;
   try {
     parsedEndpoint = new URL(endpoint);
   } catch {
-    return response.status(400).json({ error: 'Provide a valid push subscription.' });
+    return response.status(400).json({ error: 'Abonnement push invalide.' });
   }
   if (parsedEndpoint.protocol !== 'https:' || typeof keys?.p256dh !== 'string' || !keys.p256dh
     || typeof keys?.auth !== 'string' || !keys.auth) {
-    return response.status(400).json({ error: 'Provide a valid push subscription.' });
+    return response.status(400).json({ error: 'Abonnement push invalide.' });
   }
   db.prepare(`
     INSERT INTO push_subscriptions (endpoint, user_id, p256dh, auth, created_at)
@@ -408,10 +423,10 @@ app.delete('/api/notifications/subscriptions', requireUser, (request, response) 
   try {
     parsedEndpoint = new URL(endpoint);
   } catch {
-    return response.status(400).json({ error: 'Provide a valid push subscription.' });
+    return response.status(400).json({ error: 'Abonnement push invalide.' });
   }
   if (parsedEndpoint.protocol !== 'https:') {
-    return response.status(400).json({ error: 'Provide a valid push subscription.' });
+    return response.status(400).json({ error: 'Abonnement push invalide.' });
   }
   db.prepare('DELETE FROM push_subscriptions WHERE endpoint = ? AND user_id = ?')
     .run(parsedEndpoint.href, request.user.id);
@@ -420,8 +435,70 @@ app.delete('/api/notifications/subscriptions', requireUser, (request, response) 
   response.json({ ok: true, hasSubscription });
 });
 
+function marketOdds(total, selected, optionCount) {
+  return Number(((total + optionCount) / (selected + 1)).toFixed(2));
+}
+
+function serializeMarkets(rows, userId) {
+  if (rows.length === 0) return [];
+  const ids = rows.map((market) => market.id);
+  const placeholders = ids.map(() => '?').join(', ');
+  const totals = db.prepare(`
+    SELECT market_id, choice_index, COUNT(*) AS count, SUM(amount) AS staked
+    FROM bets WHERE market_id IN (${placeholders}) GROUP BY market_id, choice_index
+  `).all(...ids);
+  const myBets = db.prepare(`
+    SELECT market_id, choice_index, amount, decimal_odds FROM bets
+    WHERE user_id = ? AND market_id IN (${placeholders})
+  `).all(userId, ...ids);
+  const commentCounts = db.prepare(`
+    SELECT market_id, COUNT(*) AS count FROM market_comments
+    WHERE market_id IN (${placeholders}) GROUP BY market_id
+  `).all(...ids);
+  const totalsByMarket = new Map();
+  for (const row of totals) {
+    if (!totalsByMarket.has(row.market_id)) totalsByMarket.set(row.market_id, []);
+    totalsByMarket.get(row.market_id).push(row);
+  }
+  const betsByMarket = new Map(myBets.map((bet) => [bet.market_id, bet]));
+  const commentsByMarket = new Map(commentCounts.map((row) => [row.market_id, row.count]));
+  return rows.map((market) => {
+    const options = JSON.parse(market.options_json);
+    const marketBets = totalsByMarket.get(market.id) ?? [];
+    const totalPickCount = marketBets.reduce((sum, bet) => sum + bet.count, 0);
+    const optionStats = Array.from({ length: options.length }, (_, index) => {
+      const summary = marketBets.find((entry) => entry.choice_index === index);
+      const count = summary?.count ?? 0;
+      return { count, staked: summary?.staked ?? 0, odds: marketOdds(totalPickCount, count, options.length) };
+    });
+    const myBet = betsByMarket.get(market.id);
+    return {
+      id: market.id,
+      title: market.title,
+      description: market.description,
+      category: market.category,
+      options,
+      outcomeIndex: market.outcome_index,
+      status: market.status,
+      cancelledAt: market.cancelled_at,
+      endsAt: market.ends_at,
+      createdAt: market.created_at,
+      creator: market.creator_name,
+      creatorId: market.creator_id,
+      optionStats,
+      totalStaked: marketBets.reduce((sum, bet) => sum + bet.staked, 0),
+      bettorsCount: totalPickCount,
+      commentsCount: commentsByMarket.get(market.id) ?? 0,
+      myBet: myBet ? {
+        choiceIndex: myBet.choice_index,
+        amount: myBet.amount,
+        odds: myBet.decimal_odds,
+      } : null,
+    };
+  });
+}
+
 app.get('/api/markets', requireUser, (request, response) => {
-  const user = request.user;
   const markets = db.prepare(`
     SELECT markets.*, users.username AS creator_name
     FROM markets JOIN users ON users.id = markets.creator_id
@@ -431,88 +508,145 @@ app.get('/api/markets', requireUser, (request, response) => {
       ELSE 2
     END, markets.created_at DESC
   `).all(new Date().toISOString());
-  const totals = db.prepare(`
-    SELECT market_id, choice_index, COUNT(*) AS count, SUM(amount) AS staked
-    FROM bets GROUP BY market_id, choice_index
-  `).all();
-  const myBets = user
-    ? db.prepare('SELECT market_id, choice_index, amount, decimal_odds FROM bets WHERE user_id = ?').all(user.id)
-    : [];
-  const totalsByMarket = new Map();
-  for (const row of totals) {
-    if (!totalsByMarket.has(row.market_id)) totalsByMarket.set(row.market_id, []);
-    totalsByMarket.get(row.market_id).push(row);
+  response.json({ markets: serializeMarkets(markets, request.user.id) });
+});
+
+// Fiche marché : historique des probabilités (rejoué à partir des mises),
+// activité, plus gros détenteurs et commentaires. Rien de nouveau n'est stocké
+// pour l'historique : tout est recalculé depuis la table bets.
+app.get('/api/markets/:id', requireUser, (request, response) => {
+  const row = db.prepare(`
+    SELECT markets.*, users.username AS creator_name
+    FROM markets JOIN users ON users.id = markets.creator_id
+    WHERE markets.id = ?
+  `).get(request.params.id);
+  if (!row) return response.status(404).json({ error: 'Marché introuvable.' });
+  const [market] = serializeMarkets([row], request.user.id);
+  const optionCount = market.options.length;
+  const bets = db.prepare(`
+    SELECT bets.id, bets.choice_index, bets.amount, bets.decimal_odds, bets.created_at, users.username
+    FROM bets JOIN users ON users.id = bets.user_id
+    WHERE bets.market_id = ? ORDER BY bets.created_at ASC, bets.id ASC
+  `).all(market.id);
+
+  const counts = new Array(optionCount).fill(0);
+  const probabilities = () => {
+    const total = counts.reduce((sum, count) => sum + count, 0);
+    return counts.map((count) => (count + 1) / (total + optionCount));
+  };
+  const history = [{ t: market.createdAt, p: probabilities() }];
+  for (const bet of bets) {
+    if (bet.choice_index >= 0 && bet.choice_index < optionCount) counts[bet.choice_index] += 1;
+    history.push({ t: bet.created_at, p: probabilities() });
   }
-  const betsByMarket = new Map(myBets.map((bet) => [bet.market_id, bet]));
+
+  const holders = market.options.map((_, index) => bets
+    .filter((bet) => bet.choice_index === index)
+    .sort((first, second) => second.amount - first.amount)
+    .slice(0, 10)
+    .map((bet) => ({
+      username: bet.username,
+      amount: bet.amount,
+      odds: bet.decimal_odds,
+      payout: Math.floor(bet.amount * bet.decimal_odds),
+    })));
+
+  const activity = bets.slice(-50).reverse().map((bet) => ({
+    id: bet.id,
+    username: bet.username,
+    choiceIndex: bet.choice_index,
+    amount: bet.amount,
+    odds: bet.decimal_odds,
+    createdAt: bet.created_at,
+  }));
+
+  const comments = db.prepare(`
+    SELECT market_comments.id, market_comments.body, market_comments.created_at AS createdAt,
+      users.username, bets.choice_index AS choiceIndex
+    FROM market_comments
+    JOIN users ON users.id = market_comments.user_id
+    LEFT JOIN bets ON bets.market_id = market_comments.market_id AND bets.user_id = market_comments.user_id
+    WHERE market_comments.market_id = ?
+    ORDER BY market_comments.created_at DESC, market_comments.id DESC LIMIT 200
+  `).all(market.id);
+
+  response.json({ market, history, activity, holders, comments });
+});
+
+app.post('/api/markets/:id/comments', requireUser, (request, response) => {
+  const body = typeof request.body.body === 'string' ? request.body.body.trim() : '';
+  if (body.length < 1 || body.length > 500) {
+    return response.status(400).json({ error: 'Un commentaire fait entre 1 et 500 caractères.' });
+  }
+  const market = db.prepare('SELECT id FROM markets WHERE id = ?').get(request.params.id);
+  if (!market) return response.status(404).json({ error: 'Marché introuvable.' });
+  const createdAt = new Date().toISOString();
+  const result = db.prepare(`
+    INSERT INTO market_comments (market_id, user_id, body, created_at) VALUES (?, ?, ?, ?)
+  `).run(market.id, request.user.id, body, createdAt);
+  response.status(201).json({ comment: { id: Number(result.lastInsertRowid), body, createdAt, username: request.user.username } });
+});
+
+// Fil d'activité global (dernières prises, tous marchés confondus).
+app.get('/api/activity', requireUser, (request, response) => {
+  const activity = db.prepare(`
+    SELECT bets.id, bets.market_id AS marketId, bets.choice_index AS choiceIndex, bets.amount,
+      bets.decimal_odds AS odds, bets.created_at AS createdAt, users.username,
+      markets.title AS marketTitle, markets.options_json
+    FROM bets
+    JOIN users ON users.id = bets.user_id
+    JOIN markets ON markets.id = bets.market_id
+    ORDER BY bets.created_at DESC, bets.id DESC LIMIT 30
+  `).all();
   response.json({
-    markets: markets.map((market) => {
-      const options = JSON.parse(market.options_json);
-      const marketBets = totalsByMarket.get(market.id) ?? [];
-      const totalPickCount = marketBets.reduce((sum, bet) => sum + bet.count, 0);
-      const optionStats = Array.from({ length: options.length }, (_, index) => {
-        const summary = (totalsByMarket.get(market.id) ?? []).find((entry) => entry.choice_index === index);
-        const count = summary?.count ?? 0;
-        const odds = Number(((totalPickCount + options.length) / (count + 1)).toFixed(2));
-        return { count, staked: summary?.staked ?? 0, odds };
-      });
-      const myBet = betsByMarket.get(market.id);
-      return {
-        id: market.id,
-        title: market.title,
-        description: market.description,
-        category: market.category,
-        options,
-        outcomeIndex: market.outcome_index,
-        status: market.status,
-        cancelledAt: market.cancelled_at,
-        endsAt: market.ends_at,
-        createdAt: market.created_at,
-        creator: market.creator_name,
-        creatorId: market.creator_id,
-        optionStats,
-        totalStaked: marketBets.reduce((sum, bet) => sum + bet.staked, 0),
-        bettorsCount: marketBets.reduce((sum, bet) => sum + bet.count, 0),
-        myBet: myBet ? {
-          choiceIndex: myBet.choice_index,
-          amount: myBet.amount,
-          odds: myBet.decimal_odds,
-        } : null,
-      };
-    }),
+    activity: activity.map(({ options_json: optionsJson, ...entry }) => ({
+      ...entry,
+      outcome: JSON.parse(optionsJson)[entry.choiceIndex] ?? '?',
+    })),
   });
 });
 
 app.get('/api/leaderboard', requireUser, (request, response) => {
+  const requestedLimit = Number(request.query.limit ?? 8);
+  const limit = Number.isInteger(requestedLimit) ? Math.min(Math.max(requestedLimit, 1), 100) : 8;
+  // Les champs id, username, balance et wins sont ceux de l'ancienne API ;
+  // volume, inPlay, pnl et positions sont des ajouts.
   const leaders = db.prepare(`
     SELECT users.id, users.username, users.balance,
       (SELECT COUNT(*) FROM bets JOIN markets ON markets.id = bets.market_id
        WHERE bets.user_id = users.id AND bets.choice_index = markets.outcome_index
-         AND markets.status = 'resolved') AS wins
-    FROM users ORDER BY users.balance DESC, users.created_at ASC LIMIT 8
-  `).all();
-  response.json({ leaders });
+         AND markets.status = 'resolved') AS wins,
+      (SELECT COALESCE(SUM(amount), 0) FROM bets WHERE bets.user_id = users.id) AS volume,
+      (SELECT COUNT(*) FROM bets WHERE bets.user_id = users.id) AS positions,
+      (SELECT COALESCE(SUM(bets.amount), 0) FROM bets JOIN markets ON markets.id = bets.market_id
+       WHERE bets.user_id = users.id AND markets.status = 'open') AS inPlay
+    FROM users ORDER BY users.balance DESC, users.created_at ASC LIMIT ?
+  `).all(limit);
+  response.json({
+    leaders: leaders.map((leader) => ({ ...leader, pnl: leader.balance + leader.inPlay - 1000 })),
+  });
 });
 
 app.post('/api/markets', requireUser, (request, response) => {
   const { title, description, category, options, endsAt } = request.body;
   if (typeof title !== 'string' || title.trim().length < 8 || title.trim().length > 100) {
-    return response.status(400).json({ error: 'Question must be between 8 and 100 characters.' });
+    return response.status(400).json({ error: 'La question fait entre 8 et 100 caractères.' });
   }
   if (typeof description !== 'string' || description.trim().length > 280) {
-    return response.status(400).json({ error: 'Description must be 280 characters or fewer.' });
+    return response.status(400).json({ error: 'La description fait 280 caractères maximum.' });
   }
-  if (!categories.has(category)) return response.status(400).json({ error: 'Choose a valid category.' });
+  if (!categories.has(category)) return response.status(400).json({ error: 'Catégorie invalide.' });
   if (!Array.isArray(options) || options.length < 2 || options.length > 6
     || options.some((option) => typeof option !== 'string' || !option.trim() || option.trim().length > 40)) {
-    return response.status(400).json({ error: 'Add between 2 and 6 answer choices, up to 40 characters each.' });
+    return response.status(400).json({ error: 'Ajoutez entre 2 et 6 issues, de 40 caractères maximum.' });
   }
   const cleanOptions = options.map((option) => option.trim());
   if (new Set(cleanOptions.map((option) => option.toLowerCase())).size !== cleanOptions.length) {
-    return response.status(400).json({ error: 'Answer choices must be unique.' });
+    return response.status(400).json({ error: 'Les issues doivent être toutes différentes.' });
   }
   const expiry = Date.parse(endsAt);
   if (!Number.isFinite(expiry) || expiry < Date.now() + 60_000 || expiry > Date.now() + 90 * 24 * 60 * 60 * 1000) {
-    return response.status(400).json({ error: 'Choose an expiration from 1 minute to 90 days from now.' });
+    return response.status(400).json({ error: 'La clôture doit être entre 1 minute et 90 jours à partir de maintenant.' });
   }
 
   const id = randomUUID();
@@ -529,25 +663,25 @@ app.post('/api/markets', requireUser, (request, response) => {
 
 app.patch('/api/markets/:id', requireUser, (request, response) => {
   const market = db.prepare('SELECT id, creator_id, status FROM markets WHERE id = ?').get(request.params.id);
-  if (!market) return response.status(404).json({ error: 'Market not found.' });
+  if (!market) return response.status(404).json({ error: 'Marché introuvable.' });
   if (market.creator_id !== request.user.id) {
-    return response.status(403).json({ error: 'Only the market creator can edit this market.' });
+    return response.status(403).json({ error: 'Seul le créateur du marché peut le modifier.' });
   }
   if (market.status !== 'open') {
-    return response.status(409).json({ error: 'Resolved markets cannot be edited.' });
+    return response.status(409).json({ error: 'Un marché résolu ne peut plus être modifié.' });
   }
 
   const { title, description, category, endsAt } = request.body;
   if (typeof title !== 'string' || title.trim().length < 8 || title.trim().length > 100) {
-    return response.status(400).json({ error: 'Question must be between 8 and 100 characters.' });
+    return response.status(400).json({ error: 'La question fait entre 8 et 100 caractères.' });
   }
   if (typeof description !== 'string' || description.trim().length > 280) {
-    return response.status(400).json({ error: 'Description must be 280 characters or fewer.' });
+    return response.status(400).json({ error: 'La description fait 280 caractères maximum.' });
   }
-  if (!categories.has(category)) return response.status(400).json({ error: 'Choose a valid category.' });
+  if (!categories.has(category)) return response.status(400).json({ error: 'Catégorie invalide.' });
   const expiry = Date.parse(endsAt);
   if (!Number.isFinite(expiry) || expiry < Date.now() + 60_000 || expiry > Date.now() + 90 * 24 * 60 * 60 * 1000) {
-    return response.status(400).json({ error: 'Choose an expiration from 1 minute to 90 days from now.' });
+    return response.status(400).json({ error: 'La clôture doit être entre 1 minute et 90 jours à partir de maintenant.' });
   }
 
   db.prepare(`
@@ -560,22 +694,22 @@ app.post('/api/markets/:id/bets', requireUser, (request, response) => {
   const choiceIndex = Number(request.body.choiceIndex);
   const amount = Number(request.body.amount);
   const market = db.prepare('SELECT * FROM markets WHERE id = ?').get(request.params.id);
-  if (!market) return response.status(404).json({ error: 'Market not found.' });
+  if (!market) return response.status(404).json({ error: 'Marché introuvable.' });
   if (market.status !== 'open' || Date.parse(market.ends_at) <= Date.now()) {
-    return response.status(400).json({ error: 'This market is no longer taking bets.' });
+    return response.status(400).json({ error: 'Ce marché n’accepte plus de prises.' });
   }
   const options = JSON.parse(market.options_json);
   if (!Number.isInteger(choiceIndex) || choiceIndex < 0 || choiceIndex >= options.length) {
-    return response.status(400).json({ error: 'Choose one of the listed outcomes.' });
+    return response.status(400).json({ error: 'Choisissez une des issues proposées.' });
   }
   if (!Number.isSafeInteger(amount) || amount < 1 || amount > 100_000) {
-    return response.status(400).json({ error: 'Stake a whole number of credits between 1 and 100,000.' });
+    return response.status(400).json({ error: 'Misez un nombre entier de crédits entre 1 et 100 000.' });
   }
 
   try {
     db.transaction(() => {
       if (db.prepare('SELECT 1 FROM bets WHERE market_id = ? AND user_id = ?').get(market.id, request.user.id)) {
-        throw Object.assign(new Error('You already have a position in this market.'), { status: 409 });
+        throw Object.assign(new Error('Vous avez déjà une position sur ce marché.'), { status: 409 });
       }
       const pickCounts = db.prepare(`
         SELECT COUNT(*) AS total, SUM(CASE WHEN choice_index = ? THEN 1 ELSE 0 END) AS selected
@@ -585,7 +719,7 @@ app.post('/api/markets/:id/bets', requireUser, (request, response) => {
       const decimalOdds = Number(((pickCounts.total + options.length) / (selectedCount + 1)).toFixed(2));
       const debit = db.prepare('UPDATE users SET balance = balance - ? WHERE id = ? AND balance >= ?')
         .run(amount, request.user.id, amount);
-      if (debit.changes !== 1) throw Object.assign(new Error('Not enough credits for that stake.'), { status: 400 });
+      if (debit.changes !== 1) throw Object.assign(new Error('Solde insuffisant pour cette mise.'), { status: 400 });
       db.prepare(`
         INSERT INTO bets (market_id, user_id, choice_index, amount, decimal_odds, created_at)
         VALUES (?, ?, ?, ?, ?, ?)
@@ -593,9 +727,9 @@ app.post('/api/markets/:id/bets', requireUser, (request, response) => {
     })();
   } catch (error) {
     if (error.status) return response.status(error.status).json({ error: error.message });
-    if (error.code === 'SQLITE_CONSTRAINT_UNIQUE') return response.status(409).json({ error: 'You already have a position in this market.' });
+    if (error.code === 'SQLITE_CONSTRAINT_UNIQUE') return response.status(409).json({ error: 'Vous avez déjà une position sur ce marché.' });
     console.error(error);
-    return response.status(500).json({ error: 'Could not place your bet.' });
+    return response.status(500).json({ error: 'Impossible de passer l’ordre.' });
   }
   response.json({ user: publicUser(db.prepare('SELECT id, username, balance FROM users WHERE id = ?').get(request.user.id)) });
 });
@@ -606,11 +740,11 @@ app.post('/api/markets/:id/resolve', requireUser, (request, response) => {
   try {
     db.transaction(() => {
       const market = db.prepare('SELECT * FROM markets WHERE id = ?').get(request.params.id);
-      if (!market) throw Object.assign(new Error('Market not found.'), { status: 404 });
-      if (market.status === 'resolved') throw Object.assign(new Error('This market has already been resolved.'), { status: 409 });
+      if (!market) throw Object.assign(new Error('Marché introuvable.'), { status: 404 });
+      if (market.status === 'resolved') throw Object.assign(new Error('Ce marché est déjà résolu.'), { status: 409 });
       const options = JSON.parse(market.options_json);
       if (!Number.isInteger(outcomeIndex) || outcomeIndex < 0 || outcomeIndex >= options.length) {
-        throw Object.assign(new Error('Choose one of the listed outcomes.'), { status: 400 });
+        throw Object.assign(new Error('Choisissez une des issues proposées.'), { status: 400 });
       }
       db.prepare('UPDATE markets SET status = \'resolved\', outcome_index = ? WHERE id = ?')
         .run(outcomeIndex, market.id);
@@ -625,7 +759,7 @@ app.post('/api/markets/:id/resolve', requireUser, (request, response) => {
   } catch (error) {
     if (error.status) return response.status(error.status).json({ error: error.message });
     console.error(error);
-    return response.status(500).json({ error: 'Could not resolve this market.' });
+    return response.status(500).json({ error: 'Impossible de résoudre ce marché.' });
   }
   notifyPollResolved(request.params.id, resolvedTitle);
   response.json({ user: publicUser(db.prepare('SELECT id, username, balance FROM users WHERE id = ?').get(request.user.id)) });
@@ -635,12 +769,12 @@ app.post('/api/markets/:id/cancel', requireUser, (request, response) => {
   try {
     const result = db.transaction(() => {
       const market = db.prepare('SELECT id, creator_id, status FROM markets WHERE id = ?').get(request.params.id);
-      if (!market) throw Object.assign(new Error('Market not found.'), { status: 404 });
+      if (!market) throw Object.assign(new Error('Marché introuvable.'), { status: 404 });
       if (market.creator_id !== request.user.id) {
-        throw Object.assign(new Error('Only the market creator can cancel this market.'), { status: 403 });
+        throw Object.assign(new Error('Seul le créateur du marché peut l’annuler.'), { status: 403 });
       }
       if (market.status !== 'open') {
-        throw Object.assign(new Error('This market is already closed.'), { status: 409 });
+        throw Object.assign(new Error('Ce marché est déjà clôturé.'), { status: 409 });
       }
 
       const bets = db.prepare('SELECT user_id, amount FROM bets WHERE market_id = ?').all(market.id);
@@ -654,7 +788,7 @@ app.post('/api/markets/:id/cancel', requireUser, (request, response) => {
       const closed = db.prepare(`
         UPDATE markets SET status = 'resolved', cancelled_at = ? WHERE id = ? AND status = 'open'
       `).run(cancelledAt, market.id);
-      if (closed.changes !== 1) throw Object.assign(new Error('This market is already closed.'), { status: 409 });
+      if (closed.changes !== 1) throw Object.assign(new Error('Ce marché est déjà clôturé.'), { status: 409 });
 
       return {
         refundedCredits: bets.reduce((total, bet) => total + bet.amount, 0),
@@ -668,11 +802,11 @@ app.post('/api/markets/:id/cancel', requireUser, (request, response) => {
   } catch (error) {
     if (error.status) return response.status(error.status).json({ error: error.message });
     console.error(error);
-    return response.status(500).json({ error: 'Could not cancel this market and refund its callers.' });
+    return response.status(500).json({ error: 'Impossible d’annuler ce marché et de rembourser les mises.' });
   }
 });
 
-app.use('/api', (request, response) => response.status(404).json({ error: 'API route not found.' }));
+app.use('/api', (request, response) => response.status(404).json({ error: 'Route API introuvable.' }));
 
 const buildDirectory = path.join(root, 'dist');
 if (fs.existsSync(buildDirectory)) {
@@ -681,5 +815,5 @@ if (fs.existsSync(buildDirectory)) {
 }
 
 app.listen(port, () => {
-  console.log(`NiggaBet API listening on http://localhost:${port}`);
+  console.log(`${brand.name} API listening on http://localhost:${port}`);
 });

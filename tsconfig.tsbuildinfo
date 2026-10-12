@@ -1,1 +1,1 @@
-{"root":["./src/app.tsx","./src/main.tsx"],"version":"5.9.3"}
+{"root":["./src/app.tsx","./src/api.ts","./src/brand.ts","./src/format.ts","./src/main.tsx","./src/router.ts","./src/components/bits.tsx","./src/components/chrome.tsx","./src/components/logo.tsx","./src/components/marketcard.tsx","./src/components/modals.tsx","./src/components/pricechart.tsx","./src/components/tradepanel.tsx","./src/pages/home.tsx","./src/pages/landing.tsx","./src/pages/leaderboard.tsx","./src/pages/marketpage.tsx","./src/pages/portfolio.tsx"],"version":"5.9.3"}
