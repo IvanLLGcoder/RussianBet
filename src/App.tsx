@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { request } from './api';
 import type { Market, MarketValues, User } from './api';
 import { Header, MobileTabs, Toasts, type Feed, type Toast } from './components/Chrome';
@@ -36,6 +36,7 @@ export default function App() {
   const [notificationsOpen, setNotificationsOpen] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
   const [toasts, setToasts] = useState<Toast[]>([]);
+  const inviteLinkHandled = useRef(false);
 
   const notify = useCallback((title: string, body?: string, tone: Toast['tone'] = 'success') => {
     const id = Date.now() + Math.random();
@@ -54,7 +55,9 @@ export default function App() {
       setUser(me.user);
       if (!me.user) {
         setMarkets([]);
-        if (new URLSearchParams(window.location.search).has('invite')) setAuthMode('register');
+        // Ouvre la feuille d'inscription une seule fois : le rafraîchissement périodique ne doit pas la rouvrir.
+        if (!inviteLinkHandled.current && new URLSearchParams(window.location.search).get('invite')) setAuthMode('register');
+        inviteLinkHandled.current = true;
       } else {
         const result = await request<{ markets: Market[] }>('/api/markets');
         setMarkets(result.markets);
@@ -198,7 +201,7 @@ export default function App() {
         <div className="network-alert" role="status">{networkError}<button onClick={() => void refresh()}>Réessayer</button></div>
       )}
       {page}
-      {user && <MobileTabs route={route} onCreate={openCreate} />}
+      {user && <MobileTabs route={route} onCreate={openCreate} onInvite={() => setInviteOpen(true)} />}
 
       {authMode && (
         <AuthModal

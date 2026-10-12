@@ -10,10 +10,11 @@ import webPush from 'web-push';
 const directory = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(directory, '..');
 const brand = JSON.parse(fs.readFileSync(path.join(root, 'brand.config.json'), 'utf8'));
-const dataDirectory = path.join(root, 'data');
-fs.mkdirSync(dataDirectory, { recursive: true });
+// On ne crée que le dossier qui contient réellement la base (DB_PATH peut pointer ailleurs, ex. /donnees en Docker).
+const databasePath = process.env.DB_PATH || path.join(root, 'data', 'oddsroom.sqlite');
+fs.mkdirSync(path.dirname(databasePath), { recursive: true });
 
-const db = new Database(process.env.DB_PATH || path.join(dataDirectory, 'oddsroom.sqlite'));
+const db = new Database(databasePath);
 db.pragma('journal_mode = WAL');
 db.pragma('foreign_keys = ON');
 db.exec(`
@@ -202,6 +203,13 @@ function setSession(response, userId) {
   });
 }
 
+const internalEmailDomain = 'sans-email.invalid';
+
+function isInternalEmail(email) {
+  return email.toLowerCase().endsWith(`@${internalEmailDomain}`);
+}
+
+// Seuls id, pseudo et solde sortent vers le client : jamais l'e-mail (réel ou interne).
 function publicUser(user) {
   return { id: user.id, username: user.username, balance: user.balance };
 }
@@ -268,19 +276,23 @@ app.get('/api/me', (request, response) => {
 
 app.post('/api/auth/register', async (request, response) => {
   const username = typeof request.body.username === 'string' ? request.body.username.trim() : '';
-  const email = typeof request.body.email === 'string' ? request.body.email.trim().toLowerCase() : '';
+  const providedEmail = typeof request.body.email === 'string' ? request.body.email.trim().toLowerCase() : '';
   const password = typeof request.body.password === 'string' ? request.body.password : '';
   const inviteCode = typeof request.body.inviteCode === 'string' ? request.body.inviteCode.trim().toUpperCase() : '';
   if (!/^[a-zA-Z0-9_]{3,20}$/.test(username)) {
-    return response.status(400).json({ error: 'Le pseudo fait 3 à 20 caractères : lettres, chiffres ou _.' });
+    return response.status(400).json({ error: 'Le nom fait 3 à 20 caractères : lettres, chiffres ou _.' });
   }
-  if (!/^\S+@\S+\.\S+$/.test(email) || email.length > 254) {
+  // L'e-mail est facultatif. Sans e-mail, on stocke une adresse interne unique et non routable
+  // (TLD réservé .invalid) pour respecter la contrainte NOT NULL UNIQUE du schéma ; elle n'est jamais renvoyée.
+  if (providedEmail && (!/^\S+@\S+\.\S+$/.test(providedEmail) || providedEmail.length > 254 || isInternalEmail(providedEmail))) {
     return response.status(400).json({ error: 'Adresse e-mail invalide.' });
   }
-  if (password.length < 8 || password.length > 128) {
-    return response.status(400).json({ error: 'Le mot de passe doit faire au moins 8 caractères.' });
+  if (password.length < 6 || password.length > 128) {
+    return response.status(400).json({ error: 'Le mot de passe doit faire au moins 6 caractères.' });
   }
   if (!inviteCode) return response.status(400).json({ error: 'Un code d’invitation est requis.' });
+
+  const email = providedEmail || `${username.toLowerCase()}.${randomBytes(4).toString('hex')}@${internalEmailDomain}`;
 
   try {
     const passwordHash = await bcrypt.hash(password, 10);
@@ -307,7 +319,7 @@ app.post('/api/auth/register', async (request, response) => {
   } catch (error) {
     if (error.status) return response.status(error.status).json({ error: error.message });
     if (error.code === 'SQLITE_CONSTRAINT_UNIQUE') {
-      return response.status(409).json({ error: 'Ce pseudo ou cet e-mail est déjà utilisé.' });
+      return response.status(409).json({ error: providedEmail ? 'Ce pseudo ou cet e-mail est déjà utilisé.' : 'Ce nom est déjà pris, choisissez-en un autre.' });
     }
     console.error(error);
     response.status(500).json({ error: 'Impossible de créer votre compte.' });
@@ -317,7 +329,8 @@ app.post('/api/auth/register', async (request, response) => {
 app.post('/api/auth/login', async (request, response) => {
   const identity = typeof request.body.identity === 'string' ? request.body.identity.trim() : '';
   const password = typeof request.body.password === 'string' ? request.body.password : '';
-  const user = db.prepare(`
+  // Les e-mails internes ne servent pas d'identifiant de connexion.
+  const user = isInternalEmail(identity) ? undefined : db.prepare(`
     SELECT id, username, balance, password_hash FROM users
     WHERE username = ? COLLATE NOCASE OR email = ? COLLATE NOCASE
   `).get(identity, identity);
@@ -359,6 +372,41 @@ app.post('/api/invites', requireUser, (request, response) => {
   db.prepare('INSERT INTO invite_codes (code, created_by, created_at, expires_at) VALUES (?, ?, ?, ?)')
     .run(code, request.user.id, createdAt, expiresAt);
   response.status(201).json({ invite: { code, createdAt, expiresAt, redeemedCount: 0 } });
+});
+
+// Lien d'invitation « rapide » : réutilise le code le plus récent de l'utilisateur encore valable
+// plus de 7 jours, sinon en crée un de 30 jours.
+app.post('/api/invites/link', requireUser, (request, response) => {
+  const day = 24 * 60 * 60 * 1000;
+  const select = db.prepare(`
+    SELECT invite_codes.code, invite_codes.expires_at AS expiresAt,
+      (SELECT COUNT(*) FROM invite_redemptions WHERE invite_redemptions.invite_code = invite_codes.code) AS redeemedCount
+    FROM invite_codes
+    WHERE invite_codes.created_by = ? AND invite_codes.expires_at > ?
+    ORDER BY invite_codes.created_at DESC, invite_codes.rowid DESC LIMIT 1
+  `);
+  const invite = db.transaction(() => {
+    const existing = select.get(request.user.id, new Date(Date.now() + 7 * day).toISOString());
+    if (existing) return existing;
+    const code = randomBytes(6).toString('hex').toUpperCase();
+    const createdAt = new Date().toISOString();
+    const expiresAt = new Date(Date.now() + 30 * day).toISOString();
+    db.prepare('INSERT INTO invite_codes (code, created_by, created_at, expires_at) VALUES (?, ?, ?, ?)')
+      .run(code, request.user.id, createdAt, expiresAt);
+    return { code, expiresAt, redeemedCount: 0 };
+  })();
+  response.json({ invite });
+});
+
+// Public : permet d'afficher « <pseudo> t'invite » avant l'inscription. Ne révèle que le pseudo de l'invitant.
+app.get('/api/invites/:code', (request, response) => {
+  const code = request.params.code.trim().toUpperCase();
+  const invite = db.prepare(`
+    SELECT users.username AS inviter FROM invite_codes
+    LEFT JOIN users ON users.id = invite_codes.created_by
+    WHERE invite_codes.code = ? AND invite_codes.expires_at > ?
+  `).get(code, new Date().toISOString());
+  response.json({ valid: Boolean(invite), inviter: invite?.inviter ?? null });
 });
 
 app.get('/api/notifications/settings', requireUser, (request, response) => {

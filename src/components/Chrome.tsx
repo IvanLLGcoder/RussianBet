@@ -258,13 +258,14 @@ export function Header({
   );
 }
 
-export function MobileTabs({ route, onCreate }: { route: Route; onCreate: () => void }) {
+export function MobileTabs({ route, onCreate, onInvite }: { route: Route; onCreate: () => void; onInvite: () => void }) {
   return (
     <nav className="mobile-tabs" aria-label="Navigation">
       <a className={route.name === 'home' ? 'active' : ''} {...linkProps('/')}><House size={20} />Accueil</a>
       <button onClick={onCreate}><Plus size={20} />Créer</button>
       <a className={route.name === 'portfolio' ? 'active' : ''} {...linkProps('/portfolio')}><WalletMinimal size={20} />Portefeuille</a>
       <a className={route.name === 'leaderboard' ? 'active' : ''} {...linkProps('/leaderboard')}><Trophy size={20} />Classement</a>
+      <button onClick={onInvite}><UserRoundPlus size={20} />Inviter</button>
     </nav>
   );
 }

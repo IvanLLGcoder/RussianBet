@@ -15,7 +15,9 @@ npm run dev
 
 Ouvrez `http://localhost:5173`. L'API tourne sur le port 3001 et les données sont partagées par la base SQLite du serveur, `data/oddsroom.sqlite`. Les personnes du même réseau peuvent utiliser l'adresse réseau affichée par Vite dans le terminal.
 
-La création de compte se fait uniquement sur invitation. Sur une base vide, le serveur affiche dans la console un code d'invitation d'amorçage, valable 30 jours, pour le premier membre (ou utilisez `INITIAL_INVITE_CODE`). Ensuite, chaque membre connecté peut créer des liens d'invitation réutilisables, valables 1, 7 ou 30 jours, depuis le bouton **Inviter**.
+La création de compte se fait uniquement sur invitation, avec **juste un nom et un mot de passe** (6 caractères minimum, e-mail facultatif côté API et absent de l'interface). Sur une base vide, le serveur affiche dans la console un code d'invitation d'amorçage, valable 30 jours, pour le premier membre (ou utilisez `INITIAL_INVITE_CODE`). Ensuite, tout membre connecté a son lien d'invitation personnel (`/?invite=CODE`, valable 30 jours, réutilisable) via le bouton **Inviter** (onglet du bas sur téléphone, menu utilisateur sur ordinateur) : « Partager » ou « Copier le lien ». Une personne qui ouvre ce lien voit « <nom> t'invite sur DUyka PARIS » et ne remplit que son nom et son mot de passe.
+
+Routes : `POST /api/invites/link` (connecté, renvoie le lien rapide de l'utilisateur, idempotent), `GET /api/invites/:code` (public, `{ valid, inviter }`), `POST /api/auth/register` (`username`, `password`, `inviteCode`, `email` facultatif). Sans e-mail, le serveur stocke une adresse interne `nom.xxxxxxxx@sans-email.invalid` (TLD réservé, jamais renvoyée au client ni utilisable pour se connecter).
 
 ## Production
 
@@ -71,7 +73,7 @@ Générez une paire de clés VAPID avec `npx web-push generate-vapid-keys`, puis
 ## Règles des crédits
 
 - Un nouveau compte reçoit 1 000 crédits virtuels.
-- Chaque inscription demande un code d'invitation non expiré ; un code est réutilisable jusqu'à son expiration.
+- Chaque inscription demande un code d'invitation non expiré (nom + mot de passe d'au moins 6 caractères) ; un code est réutilisable jusqu'à son expiration.
 - Un membre, créateur du marché compris, peut prendre une seule position par marché, d'un montant entier, dans la limite de son solde disponible.
 - Le créateur peut modifier la question, la description, la catégorie et la clôture tant que le marché n'est pas résolu ; les issues restent figées.
 - Le créateur peut annuler un marché non résolu : chaque participant est remboursé de sa mise, et le marché annulé ainsi que les positions restent visibles.

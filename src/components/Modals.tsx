@@ -1,8 +1,9 @@
 import { useEffect, useState } from 'react';
-import { Check, Copy, Link2, Minus, Plus, X } from 'lucide-react';
+import { Check, Copy, Minus, Plus, Share2, X } from 'lucide-react';
 import { request } from '../api';
-import type { Invite, Market, MarketValues, NotificationPreferences, NotificationSettings } from '../api';
+import type { Invite, InvitePreview, Market, MarketValues, NotificationPreferences, NotificationSettings } from '../api';
 import { categories, categoryLabels, dateTime, localDateTime } from '../format';
+import brand from '../brand';
 import { Logo, Wordmark } from './Logo';
 
 export function Modal({
@@ -42,6 +43,8 @@ function errorText(problem: unknown, fallback: string) {
 
 export type AuthMode = 'register' | 'login';
 
+type PreviewState = { status: 'loading' } | { status: 'error' } | ({ status: 'done' } & InvitePreview);
+
 export function AuthModal({
   mode,
   initialInviteCode,
@@ -57,7 +60,19 @@ export function AuthModal({
 }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+  const [preview, setPreview] = useState<PreviewState>({ status: 'loading' });
   const register = mode === 'register';
+  // Arrivée par un lien d'invitation : le code est caché et prérempli, seuls le nom et le mot de passe sont demandés.
+  const fromLink = initialInviteCode.trim() !== '';
+
+  useEffect(() => {
+    if (!fromLink) return;
+    let active = true;
+    request<InvitePreview>(`/api/invites/${encodeURIComponent(initialInviteCode.trim())}`)
+      .then((result) => { if (active) setPreview({ status: 'done', ...result }); })
+      .catch(() => { if (active) setPreview({ status: 'error' }); });
+    return () => { active = false; };
+  }, [fromLink, initialInviteCode]);
 
   async function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -73,33 +88,92 @@ export function AuthModal({
     }
   }
 
-  return (
-    <Modal title={register ? 'Inscription' : 'Connexion'} onClose={onClose}>
+  const switchTo = (next: AuthMode) => { onModeChange(next); setError(''); };
+  const invalidLink = register && fromLink && preview.status === 'done' && !preview.valid;
+  const inviter = preview.status === 'done' ? preview.inviter : null;
+
+  let head: React.ReactNode;
+  if (!register) {
+    head = (
       <div className="auth-head">
         <Logo size={44} />
-        <h2>{register ? <>Rejoindre <Wordmark /></> : 'Content de vous revoir'}</h2>
-        <p>{register ? 'Inscription sur invitation. 1 000 crédits offerts à l’arrivée.' : 'Connectez-vous pour retrouver vos positions.'}</p>
+        <h2>Content de vous revoir</h2>
+        <p>Connectez-vous pour retrouver vos positions.</p>
       </div>
-      <div className="segmented auth-tabs" role="tablist">
-        <button role="tab" aria-selected={!register} className={!register ? 'active' : ''} onClick={() => { onModeChange('login'); setError(''); }}>Connexion</button>
-        <button role="tab" aria-selected={register} className={register ? 'active' : ''} onClick={() => { onModeChange('register'); setError(''); }}>Inscription</button>
+    );
+  } else if (invalidLink) {
+    head = (
+      <div className="auth-head">
+        <Logo size={44} />
+        <h2>Invitation invalide</h2>
+        <p>Ce lien d’invitation est invalide ou a expiré. Demandez-en un nouveau à la personne qui vous l’a envoyé.</p>
       </div>
-      <form className="form" onSubmit={(event) => void handleSubmit(event)}>
-        {register ? (
-          <>
-            <label>Pseudo<input autoComplete="username" name="username" placeholder="3 à 20 caractères" minLength={3} maxLength={20} required /></label>
-            <label>E-mail<input autoComplete="email" name="email" type="email" placeholder="vous@exemple.fr" required /></label>
-            <label>Code d’invitation<input autoComplete="off" name="inviteCode" placeholder="ABC123DEF456" defaultValue={initialInviteCode} required /></label>
-          </>
-        ) : (
-          <label>Pseudo ou e-mail<input autoComplete="username" name="identity" required /></label>
-        )}
-        <label>Mot de passe<input autoComplete={register ? 'new-password' : 'current-password'} name="password" type="password" minLength={register ? 8 : undefined} placeholder={register ? '8 caractères minimum' : ''} required /></label>
-        {error && <p className="form-error" role="alert">{error}</p>}
-        <button className="btn btn-primary btn-block" type="submit" disabled={busy}>
-          {busy ? 'Un instant…' : register ? 'Créer mon compte' : 'Se connecter'}
-        </button>
-      </form>
+    );
+  } else if (fromLink) {
+    head = (
+      <div className="auth-head">
+        <Logo size={44} />
+        <h2>{inviter ? <><strong className="auth-inviter">{inviter}</strong> t’invite sur <Wordmark /></> : <>Rejoindre <Wordmark /></>}</h2>
+        <p>Choisissez un nom et un mot de passe. 1 000 crédits offerts à l’arrivée.</p>
+      </div>
+    );
+  } else {
+    head = (
+      <div className="auth-head">
+        <Logo size={44} />
+        <h2>Rejoindre <Wordmark /></h2>
+        <p>Inscription sur invitation. 1 000 crédits offerts à l’arrivée.</p>
+      </div>
+    );
+  }
+
+  return (
+    <Modal title={register ? 'Inscription' : 'Connexion'} onClose={onClose}>
+      {head}
+      {!(register && fromLink) && (
+        <div className="segmented auth-tabs" role="tablist">
+          <button role="tab" aria-selected={!register} className={!register ? 'active' : ''} onClick={() => switchTo('login')}>Connexion</button>
+          <button role="tab" aria-selected={register} className={register ? 'active' : ''} onClick={() => switchTo('register')}>Inscription</button>
+        </div>
+      )}
+      {invalidLink ? (
+        <button className="btn btn-primary btn-block" type="button" onClick={() => switchTo('login')}>Se connecter</button>
+      ) : (
+        <form className="form" onSubmit={(event) => void handleSubmit(event)}>
+          {register ? (
+            <>
+              {fromLink
+                ? <input type="hidden" name="inviteCode" value={initialInviteCode} />
+                : <label>Code d’invitation<input autoComplete="off" autoCapitalize="characters" autoCorrect="off" spellCheck={false} name="inviteCode" placeholder="ABC123DEF456" required /></label>}
+              <label>Nom
+                <input
+                  autoComplete="username"
+                  autoCapitalize="none"
+                  autoCorrect="off"
+                  spellCheck={false}
+                  name="username"
+                  minLength={3}
+                  maxLength={20}
+                  pattern="[A-Za-z0-9_]{3,20}"
+                  title="3 à 20 lettres, chiffres ou _"
+                  required
+                />
+                <span className="field-hint">3 à 20 lettres, chiffres ou _</span>
+              </label>
+            </>
+          ) : (
+            <label>Nom ou e-mail<input autoComplete="username" autoCapitalize="none" autoCorrect="off" spellCheck={false} name="identity" required /></label>
+          )}
+          <label>Mot de passe<input autoComplete={register ? 'new-password' : 'current-password'} name="password" type="password" minLength={register ? 6 : undefined} maxLength={128} placeholder={register ? '6 caractères minimum' : ''} required /></label>
+          {error && <p className="form-error" role="alert">{error}</p>}
+          <button className="btn btn-primary btn-block" type="submit" disabled={busy}>
+            {busy ? 'Un instant…' : register ? 'Créer mon compte' : 'Se connecter'}
+          </button>
+        </form>
+      )}
+      {register && fromLink && (
+        <button className="auth-switch" type="button" onClick={() => switchTo('login')}>J’ai déjà un compte</button>
+      )}
       <p className="modal-fineprint">Crédits virtuels uniquement : aucun dépôt, aucun retrait.</p>
     </Modal>
   );
@@ -110,83 +184,70 @@ function inviteUrl(code: string) {
 }
 
 export function InviteModal({ onClose }: { onClose: () => void }) {
-  const [invites, setInvites] = useState<Invite[] | null>(null);
-  const [busy, setBusy] = useState(false);
+  const [invite, setInvite] = useState<Invite | null>(null);
   const [error, setError] = useState('');
-  const [copiedCode, setCopiedCode] = useState('');
-  const [validForDays, setValidForDays] = useState(7);
+  const [copied, setCopied] = useState(false);
+  const canShare = typeof navigator !== 'undefined' && typeof navigator.share === 'function';
 
   useEffect(() => {
-    request<{ invites: Invite[] }>('/api/invites')
-      .then((result) => setInvites(result.invites))
-      .catch((problem) => setError(errorText(problem, 'Impossible de charger vos invitations.')));
+    request<{ invite: Invite }>('/api/invites/link', { method: 'POST' })
+      .then((result) => setInvite(result.invite))
+      .catch((problem) => setError(errorText(problem, 'Impossible de créer le lien d’invitation.')));
   }, []);
 
-  async function copyLink(code: string) {
+  useEffect(() => {
+    if (!copied) return;
+    const timer = window.setTimeout(() => setCopied(false), 2500);
+    return () => window.clearTimeout(timer);
+  }, [copied]);
+
+  const link = invite ? inviteUrl(invite.code) : '';
+
+  async function copyLink() {
     try {
-      await navigator.clipboard.writeText(inviteUrl(code));
-      setCopiedCode(code);
+      await navigator.clipboard.writeText(link);
+      setCopied(true);
       setError('');
     } catch {
       setError('Presse-papiers indisponible : sélectionnez le lien pour le copier.');
     }
   }
 
-  async function generateInvite() {
-    setBusy(true);
-    setError('');
+  async function shareLink() {
     try {
-      const result = await request<{ invite: Invite }>('/api/invites', {
-        method: 'POST',
-        body: JSON.stringify({ validForDays }),
-      });
-      setInvites((current) => [result.invite, ...(current ?? [])]);
-      await copyLink(result.invite.code);
+      await navigator.share({ title: brand.name, text: `Rejoins-moi sur ${brand.name}`, url: link });
     } catch (problem) {
-      setError(errorText(problem, 'Impossible de créer l’invitation.'));
-    } finally {
-      setBusy(false);
+      // Fermer la feuille de partage n'est pas une erreur.
+      if (!(problem instanceof DOMException && problem.name === 'AbortError')) setError('Partage impossible : copiez le lien à la place.');
     }
   }
 
   return (
     <Modal title="Inviter" onClose={onClose}>
-      <h2 className="modal-title">Inviter quelqu’un</h2>
-      <p className="modal-intro">Un lien d’invitation peut servir plusieurs fois jusqu’à son expiration.</p>
-      <div className="invite-create">
-        <div className="segmented" role="radiogroup" aria-label="Durée de validité">
-          {[1, 7, 30].map((days) => (
-            <button key={days} role="radio" aria-checked={validForDays === days} className={validForDays === days ? 'active' : ''} onClick={() => setValidForDays(days)}>
-              {days} {days === 1 ? 'jour' : 'jours'}
+      <h2 className="modal-title">Inviter des amis</h2>
+      <p className="modal-intro">Envoyez ce lien : il suffit d’un nom et d’un mot de passe pour s’inscrire. Il peut servir à autant de personnes que vous voulez.</p>
+      {invite ? (
+        <>
+          <input
+            className="invite-link"
+            readOnly
+            value={link}
+            aria-label="Lien d’invitation"
+            onFocus={(event) => event.currentTarget.select()}
+          />
+          <div className="invite-actions">
+            {canShare && <button className="btn btn-primary btn-large" onClick={() => void shareLink()}><Share2 size={18} />Partager</button>}
+            <button className={`btn btn-large ${canShare ? 'btn-ghost' : 'btn-primary'}`} onClick={() => void copyLink()}>
+              {copied ? <><Check size={18} />Lien copié</> : <><Copy size={18} />Copier le lien</>}
             </button>
-          ))}
-        </div>
-        <button className="btn btn-primary" onClick={() => void generateInvite()} disabled={busy}>
-          <Plus size={16} />{busy ? 'Création…' : 'Créer un lien'}
-        </button>
-      </div>
+          </div>
+          <p className="invite-stats">
+            <strong>{invite.redeemedCount}</strong> {invite.redeemedCount > 1 ? 'personnes inscrites' : 'personne inscrite'} avec ce lien
+            {' · '}expire le {dateTime(invite.expiresAt)}
+          </p>
+        </>
+      ) : !error && <p className="muted">Préparation du lien…</p>}
       {error && <p className="form-error" role="alert">{error}</p>}
-      <div className="list-heading">Vos invitations <span>{invites?.length ?? 0}</span></div>
-      {invites === null ? <p className="muted">Chargement…</p> : invites.length === 0 ? (
-        <p className="muted">Aucune invitation pour l’instant.</p>
-      ) : (
-        <div className="invite-list">
-          {invites.map((invite) => {
-            const expired = new Date(invite.expiresAt).getTime() <= Date.now();
-            return (
-              <div className={`invite-row${expired ? ' invite-expired' : ''}`} key={invite.code}>
-                <div className="invite-row-main">
-                  <span className="invite-code"><Link2 size={13} />{invite.code}</span>
-                  <small>{expired ? 'Expirée' : `Expire le ${dateTime(invite.expiresAt)}`} · {invite.redeemedCount} inscription{invite.redeemedCount > 1 ? 's' : ''}</small>
-                </div>
-                <button className="icon-btn" title="Copier le lien" aria-label={`Copier l’invitation ${invite.code}`} disabled={expired} onClick={() => void copyLink(invite.code)}>
-                  {copiedCode === invite.code ? <Check size={16} /> : <Copy size={15} />}
-                </button>
-              </div>
-            );
-          })}
-        </div>
-      )}
     </Modal>
   );
 }

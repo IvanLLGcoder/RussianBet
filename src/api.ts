@@ -1,6 +1,7 @@
 export type User = { id: number; username: string; balance: number };
 export type Leader = User & { wins: number; volume: number; positions: number; inPlay: number; pnl: number };
-export type Invite = { code: string; createdAt: string; expiresAt: string; redeemedCount: number };
+export type Invite = { code: string; expiresAt: string; redeemedCount: number };
+export type InvitePreview = { valid: boolean; inviter: string | null };
 export type NotificationPreferences = { newPolls: boolean; participatedResolutions: boolean };
 export type NotificationSettings = {
   pushEnabled: boolean;
