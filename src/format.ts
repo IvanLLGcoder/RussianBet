@@ -16,11 +16,11 @@ const numberFormat = new Intl.NumberFormat('fr-FR');
 const compactFormat = new Intl.NumberFormat('fr-FR', { notation: 'compact', maximumFractionDigits: 1 });
 
 export function credits(value: number) {
-  return `${numberFormat.format(value)} cr`;
+  return `${numberFormat.format(value)} jetons`;
 }
 
 export function compactCredits(value: number) {
-  return value >= 10_000 ? `${compactFormat.format(value)} cr` : credits(value);
+  return value >= 10_000 ? `${compactFormat.format(value)} jetons` : credits(value);
 }
 
 export function signed(value: number) {
@@ -40,7 +40,7 @@ export function percent(probability: number) {
   return `${Math.round(probability * 100)}%`;
 }
 
-// Prix « à la Polymarket » : une part paie 1 crédit si l'issue gagne, et coûte 1 / cote.
+// Prix « à la Polymarket » : une part paie 1 jeton si l'issue gagne, et coûte 1 / cote.
 export function cents(odds: number) {
   return `${Math.min(99, Math.max(1, Math.round(100 / odds)))}¢`;
 }

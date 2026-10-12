@@ -12,14 +12,14 @@ export function positionValue(market: Market) {
   return Math.round(payout(market.myBet.amount, market.myBet.odds) * chances(market)[market.myBet.choiceIndex]);
 }
 
-export function Portfolio({ user, markets, now }: { user: User; markets: Market[]; now: number }) {
+export function Portfolio({ user, markets, now, soldeDepart }: { user: User; markets: Market[]; now: number; soldeDepart: number }) {
   const [tab, setTab] = useState<'positions' | 'history'>('positions');
   const mine = markets.filter((market) => market.myBet);
   const open = mine.filter((market) => ['open', 'awaiting'].includes(marketState(market, now)));
   const closed = mine.filter((market) => !['open', 'awaiting'].includes(marketState(market, now)));
   const openValue = open.reduce((sum, market) => sum + positionValue(market), 0);
   const openStakes = open.reduce((sum, market) => sum + (market.myBet?.amount ?? 0), 0);
-  const pnl = user.balance + openStakes - 1000;
+  const pnl = user.balance + openStakes - soldeDepart;
 
   return (
     <main className="page portfolio">
@@ -27,7 +27,7 @@ export function Portfolio({ user, markets, now }: { user: User; markets: Market[
         <div className="summary-total">
           <span><WalletMinimal size={16} /> Portefeuille</span>
           <strong>{credits(user.balance + openValue)}</strong>
-          <small className={pnl >= 0 ? 'text-yes' : 'text-no'}>{signed(pnl)} cr depuis l’inscription</small>
+          <small className={pnl >= 0 ? 'text-yes' : 'text-no'}>{signed(pnl)} jetons depuis l’inscription</small>
         </div>
         <dl className="summary-stats">
           <div><dt>Disponible</dt><dd>{credits(user.balance)}</dd></div>
@@ -90,8 +90,8 @@ export function Portfolio({ user, markets, now }: { user: User; markets: Market[
                       <td>{credits(bet.amount)}</td>
                       <td>
                         {state === 'cancelled' ? <span className="muted">Remboursé</span>
-                          : won ? <span className="text-yes">Gagné {signed(payout(bet.amount, bet.odds) - bet.amount)} cr</span>
-                            : <span className="text-no">Perdu {signed(-bet.amount)} cr</span>}
+                          : won ? <span className="text-yes">Gagné {signed(payout(bet.amount, bet.odds) - bet.amount)} jetons</span>
+                            : <span className="text-no">Perdu {signed(-bet.amount)} jetons</span>}
                       </td>
                     </tr>
                   );

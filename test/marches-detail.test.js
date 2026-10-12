@@ -112,6 +112,8 @@ before(async () => {
   state.alice = await register('alice');
   state.bob = await register('bob');
   state.carol = await register('carol');
+  // Dave crée le marché principal : un créateur ne mise pas sur son propre marché, il le résout.
+  state.dave = await register('dave');
 });
 
 after(async () => {
@@ -125,7 +127,7 @@ after(async () => {
 
 test('fiche marché : historique, détenteurs et activité cohérents avec les mises', async () => {
   const { alice, bob, carol } = state;
-  state.marketId = await createMarket(alice, 'Qui gagne le tournoi de la bande ?', ['Alice', 'Bob', 'Carol']);
+  state.marketId = await createMarket(state.dave, 'Qui gagne le tournoi de la bande ?', ['Alice', 'Bob', 'Carol']);
   const marketId = state.marketId;
 
   const empty = await call(`/api/markets/${marketId}`, { cookie: alice });
@@ -207,7 +209,7 @@ test('commentaires : 201, validation 1 à 500 caractères, 401 sans session', as
   assert.equal((await call('/api/markets/inconnu/comments', { cookie: alice, body: { body: 'salut' } })).status, 404);
 
   // Un commentaire d'un membre sans position n'a pas d'issue associée.
-  const lurker = await register('dave');
+  const lurker = state.dave;
   assert.equal((await call(endpoint, { cookie: lurker, body: { body: 'Je regarde.' } })).status, 201);
   await call(endpoint, { cookie: bob, body: { body: 'Moi aussi !' } });
 
@@ -226,7 +228,7 @@ test('commentaires : 201, validation 1 à 500 caractères, 401 sans session', as
 test('/api/activity : prises de tous les marchés, plus récentes d\'abord', async () => {
   assert.equal((await call('/api/activity')).status, 401);
 
-  const secondMarketId = await createMarket(state.alice, 'Alice mange-t-elle un kebab ce soir ?', ['Oui', 'Non']);
+  const secondMarketId = await createMarket(state.bob, 'Alice mange-t-elle un kebab ce soir ?', ['Oui', 'Non']);
   state.secondMarketId = secondMarketId;
   await bet(state.alice, secondMarketId, 1, 40);
 
@@ -254,7 +256,9 @@ test('/api/activity : prises de tous les marchés, plus récentes d\'abord', asy
 
 test('classement : champs additionnels (volume, positions, inPlay, pnl)', async () => {
   // Alice a 100 sur le marché 1 (ouvert) et 40 sur le marché 2 ; on résout le marché 1 sur « Alice ».
-  const resolved = await call(`/api/markets/${state.marketId}/resolve`, { cookie: state.alice, body: { outcomeIndex: 0 } });
+  const refused = await call(`/api/markets/${state.marketId}/resolve`, { cookie: state.alice, body: { outcomeIndex: 0 } });
+  assert.equal(refused.status, 403);
+  const resolved = await call(`/api/markets/${state.marketId}/resolve`, { cookie: state.dave, body: { outcomeIndex: 0 } });
   assert.equal(resolved.status, 200);
 
   const result = await call('/api/leaderboard', { cookie: state.alice });

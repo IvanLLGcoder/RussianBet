@@ -6,6 +6,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import webPush from 'web-push';
+import { BanqueIndisponible, creerClientBanque } from './banque.js';
 
 const directory = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(directory, '..');
@@ -99,6 +100,29 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_bets_created ON bets(created_at);
 `);
 
+// Économie commune avec le poker (voir MIGRATION.md) : deux tables additives, créées dans tous les
+// modes pour que la base reste la même ; elles ne servent qu'en mode banque.
+// - comptes_banque : lien entre une ligne locale users et le compte de la banque (poker) ;
+// - banque_en_attente : mouvements à envoyer à la banque (gains, remboursements, crédits
+//   compensatoires), rejoués jusqu'au succès. essais = -1 : réserve posée avant un débit de mise,
+//   qui sert de verrou et ne part que si la mise locale n'a pas abouti.
+db.exec(`
+  CREATE TABLE IF NOT EXISTS comptes_banque (
+    user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+    compte_id INTEGER UNIQUE NOT NULL,
+    lie_le TEXT
+  );
+  CREATE TABLE IF NOT EXISTS banque_en_attente (
+    cle TEXT PRIMARY KEY,
+    compte_id INTEGER NOT NULL,
+    montant INTEGER NOT NULL,
+    motif TEXT NOT NULL,
+    cree_le TEXT NOT NULL,
+    essais INTEGER NOT NULL DEFAULT 0,
+    derniere_erreur TEXT
+  );
+`);
+
 const marketColumns = db.pragma('table_info(markets)');
 if (!marketColumns.some((column) => column.name === 'cancelled_at')) {
   db.exec('ALTER TABLE markets ADD COLUMN cancelled_at TEXT');
@@ -161,7 +185,29 @@ if (pushConfiguration.some(Boolean) && pushConfiguration.some((value) => !value)
 }
 const pushEnabled = pushConfiguration.every(Boolean);
 if (pushEnabled) webPush.setVapidDetails(vapidSubject, vapidPublicKey, vapidPrivateKey);
+// Publication sous un sous-chemin (ex. BASE_PATH=/paris derrière poker.dyuka.com/paris/) : on retire
+// le préfixe avant le routage, les routes restent « /api/… ». Vide = racine du domaine.
+const basePath = (process.env.BASE_PATH ?? '').trim().replace(/\/+$/, '');
+if (basePath) {
+  app.use((request, response, next) => {
+    if (request.url === basePath || request.url.startsWith(`${basePath}?`)) {
+      return response.redirect(301, `${basePath}/${request.url.slice(basePath.length)}`);
+    }
+    if (request.url.startsWith(`${basePath}/`)) request.url = request.url.slice(basePath.length);
+    next();
+  });
+}
 app.use(express.json({ limit: '32kb' }));
+
+// Mode banque : actif seulement si BANQUE_URL et BANQUE_SECRET sont définis. Sinon, le site
+// fonctionne en autonome, exactement comme avant (crédits locaux).
+const banqueUrl = process.env.BANQUE_URL?.trim() ?? '';
+const banqueSecret = process.env.BANQUE_SECRET?.trim() ?? '';
+const banque = banqueUrl && banqueSecret ? creerClientBanque({ url: banqueUrl, secret: banqueSecret }) : null;
+// Constantes du poker (config.py) : solde d'un nouveau compte, et le solde local historique.
+const soldeDepartBanque = 10_000;
+const soldeDepartLocal = 1000;
+const relanceBanqueMs = Math.max(50, Number(process.env.BANQUE_RELANCE_MS) || 30_000);
 
 function digest(value) {
   return createHash('sha256').update(value).digest('hex');
@@ -176,9 +222,12 @@ function getCookie(request, name) {
 function getUser(request) {
   const token = getCookie(request, 'sid');
   if (!token) return null;
+  // En mode banque, seule une ligne liée à un compte de la banque ouvre une session : un ancien
+  // compte local encore connecté doit repasser par la connexion (qui le migre vers la banque).
   return db.prepare(`
-    SELECT users.id, users.username, users.balance
+    SELECT users.id, users.username, users.balance, comptes_banque.compte_id AS compteId
     FROM sessions JOIN users ON users.id = sessions.user_id
+    ${banque ? 'JOIN' : 'LEFT JOIN'} comptes_banque ON comptes_banque.user_id = users.id
     WHERE sessions.token_hash = ? AND sessions.expires_at > ?
   `).get(digest(token), new Date().toISOString()) ?? null;
 }
@@ -198,7 +247,7 @@ function setSession(response, userId) {
     httpOnly: true,
     sameSite: 'lax',
     secure: process.env.NODE_ENV === 'production',
-    path: '/',
+    path: `${basePath}/`,
     maxAge: 30 * 24 * 60 * 60 * 1000,
   });
 }
@@ -212,6 +261,200 @@ function isInternalEmail(email) {
 // Seuls id, pseudo et solde sortent vers le client : jamais l'e-mail (réel ou interne).
 function publicUser(user) {
   return { id: user.id, username: user.username, balance: user.balance };
+}
+
+// ---------- Économie commune : outils du mode banque ----------
+
+const erreurBanqueInjoignable = 'Le poker (banque des jetons) ne répond pas. Réessayez dans un instant.';
+const erreurMiseAnnulee = 'Une mise précédente sur ce marché a été annulée et vous a été rendue : vous ne pouvez plus miser dessus.';
+
+function httpError(status, message) {
+  return Object.assign(new Error(message), { status });
+}
+
+function soldeMiroir(solde) {
+  return Number.isFinite(solde) ? Math.max(0, Math.trunc(solde)) : 0;
+}
+
+// users.balance devient le miroir du solde banque : l'ancienne version et les replis le lisent.
+function miroir(compteId, solde) {
+  if (!Number.isFinite(solde)) return;
+  db.prepare('UPDATE users SET balance = ? WHERE id = (SELECT user_id FROM comptes_banque WHERE compte_id = ?)')
+    .run(soldeMiroir(solde), compteId);
+}
+
+function versesPropres(verse) {
+  return Array.isArray(verse)
+    ? verse.filter((entry) => entry && typeof entry.motif === 'string' && Number.isFinite(entry.montant))
+      .map((entry) => ({ motif: entry.motif, montant: entry.montant }))
+    : [];
+}
+
+// Pseudo local = nom poker ; en cas de conflit avec un ancien compte local non lié, suffixe « -2 », « -3 »…
+function pseudoLibre(nom) {
+  const pris = db.prepare('SELECT 1 FROM users WHERE username = ? COLLATE NOCASE');
+  if (!pris.get(nom)) return nom;
+  for (let suffixe = 2; ; suffixe += 1) {
+    if (!pris.get(`${nom}-${suffixe}`)) return `${nom}-${suffixe}`;
+  }
+}
+
+function emailInterne(nom) {
+  const base = nom.normalize('NFD').replace(/[^a-zA-Z0-9]/g, '').toLowerCase().slice(0, 20) || 'joueur';
+  return `${base}.${randomBytes(4).toString('hex')}@${internalEmailDomain}`;
+}
+
+// Ancien compte local, jamais lié, dont le mot de passe local correspond : c'est la même personne.
+async function ancienCompteVerifie(identity, password) {
+  if (!identity || isInternalEmail(identity)) return null;
+  const ancien = db.prepare(`
+    SELECT users.id, users.username, users.password_hash FROM users
+    LEFT JOIN comptes_banque ON comptes_banque.user_id = users.id
+    WHERE comptes_banque.user_id IS NULL AND (users.username = ? COLLATE NOCASE OR users.email = ? COLLATE NOCASE)
+  `).get(identity, identity);
+  if (!ancien || !(await bcrypt.compare(password, ancien.password_hash))) return null;
+  return ancien;
+}
+
+// Retrouve la ligne locale liée au compte banque, ou la crée (ou lie l'ancien compte local donné).
+// Une ligne créée ici a un mot de passe local aléatoire : la connexion passe toujours par la banque.
+async function lierCompte(compte, ancienUserId = null) {
+  const lien = db.prepare('SELECT user_id FROM comptes_banque WHERE compte_id = ?');
+  const existant = lien.get(compte.id);
+  if (existant) {
+    miroir(compte.id, compte.solde);
+    return existant.user_id;
+  }
+  const hash = await bcrypt.hash(randomBytes(32).toString('hex'), 10);
+  return db.transaction(() => {
+    const deja = lien.get(compte.id);
+    if (deja) return deja.user_id;
+    const now = new Date().toISOString();
+    let userId = ancienUserId;
+    const ancienEncoreLibre = userId
+      && !db.prepare('SELECT 1 FROM comptes_banque WHERE user_id = ?').get(userId);
+    if (!ancienEncoreLibre) {
+      userId = Number(db.prepare(`
+        INSERT INTO users (username, email, password_hash, balance, created_at) VALUES (?, ?, ?, ?, ?)
+      `).run(pseudoLibre(compte.nom), emailInterne(compte.nom), hash, soldeMiroir(compte.solde), now).lastInsertRowid);
+    }
+    db.prepare('INSERT INTO comptes_banque (user_id, compte_id, lie_le) VALUES (?, ?, ?)').run(userId, compte.id, now);
+    db.prepare('UPDATE users SET balance = ? WHERE id = ?').run(soldeMiroir(compte.solde), userId);
+    return userId;
+  })();
+}
+
+function ouvrirSessionBanque(response, userId, compte, status = 200) {
+  setSession(response, userId);
+  const user = db.prepare('SELECT id, username, balance FROM users WHERE id = ?').get(userId);
+  response.status(status).json({ user: publicUser(user), verse: versesPropres(compte.verse) });
+}
+
+async function estAdminBanque(user) {
+  if (!banque || !user?.compteId) return false;
+  try {
+    const { status, data } = await banque.comptes([user.compteId]);
+    return status === 200 && Boolean(data.comptes?.find((compte) => compte.id === user.compteId)?.admin);
+  } catch {
+    return false;
+  }
+}
+
+function mettreEnFile(cle, compteId, montant, motif) {
+  db.prepare(`
+    INSERT OR IGNORE INTO banque_en_attente (cle, compte_id, montant, motif, cree_le, essais)
+    VALUES (?, ?, ?, ?, ?, 0)
+  `).run(cle, compteId, montant, motif, new Date().toISOString());
+}
+
+// Mises dont le débit banque est en cours (verrou en mémoire, par clé d'annulation).
+const misesEnCours = new Set();
+
+function noterEchec(cle, message) {
+  db.prepare('UPDATE banque_en_attente SET essais = essais + 1, derniere_erreur = ? WHERE cle = ? AND essais >= 0')
+    .run(String(message).slice(0, 500), cle);
+}
+
+async function viderFileUneFois() {
+  const lignes = db.prepare('SELECT * FROM banque_en_attente WHERE essais >= 0 ORDER BY cree_le, cle').all();
+  for (const ligne of lignes) {
+    try {
+      if (ligne.cle.startsWith('paris-annule-mise-')) {
+        // Le crédit compensatoire ne part que si le débit a bien eu lieu : on renvoie d'abord le débit
+        // (même clé, idempotent). S'il n'avait jamais eu lieu, il a lieu maintenant puis est compensé ;
+        // « Solde insuffisant » prouve qu'il n'a jamais eu lieu, il n'y a alors rien à rendre.
+        const debit = await banque.mouvement({
+          compte: ligne.compte_id,
+          montant: -ligne.montant,
+          motif: ligne.motif.replace(/^Paris : remboursement — /, 'Paris : mise — '),
+          cle: ligne.cle.replace(/^paris-annule-mise-/, 'paris-mise-'),
+        });
+        if (debit.status === 409 && debit.data.erreur === 'Solde insuffisant') {
+          db.prepare('DELETE FROM banque_en_attente WHERE cle = ?').run(ligne.cle);
+          continue;
+        }
+        if (debit.status !== 200) {
+          noterEchec(ligne.cle, `débit ${debit.status} : ${debit.data.erreur ?? ''}`);
+          continue;
+        }
+      }
+      const { status, data } = await banque.mouvement({
+        compte: ligne.compte_id, montant: ligne.montant, motif: ligne.motif, cle: ligne.cle,
+      });
+      if (status === 200) {
+        db.prepare('DELETE FROM banque_en_attente WHERE cle = ?').run(ligne.cle);
+        miroir(ligne.compte_id, data.solde);
+      } else {
+        noterEchec(ligne.cle, `${status} : ${data.erreur ?? ''}`);
+        console.error(`Mouvement banque refusé (${ligne.cle}) : ${status} ${data.erreur ?? ''}`);
+      }
+    } catch (error) {
+      noterEchec(ligne.cle, error.message);
+      if (error instanceof BanqueIndisponible) break; // inutile d'insister pendant une panne
+      console.error(error);
+    }
+  }
+}
+
+let vidageEnCours = null;
+let vidageDemande = false;
+
+// Envoie la file à la banque. Les clés sont déterministes : rejouer est sans risque.
+function viderFileBanque() {
+  if (!banque) return Promise.resolve();
+  vidageDemande = true;
+  if (!vidageEnCours) {
+    vidageEnCours = (async () => {
+      try {
+        while (vidageDemande) {
+          vidageDemande = false;
+          await viderFileUneFois();
+        }
+      } catch (error) {
+        console.error('Envoi de la file banque impossible :', error);
+      } finally {
+        vidageEnCours = null;
+      }
+    })();
+  }
+  return vidageEnCours;
+}
+
+// Réserves (essais = -1) laissées par une mise interrompue (panne de la banque, arrêt du serveur) :
+// si la mise locale existe, la réserve est inutile ; sinon on la transforme en crédit compensatoire.
+function activerReservesOrphelines(ageMinimumMs) {
+  const limite = new Date(Date.now() - ageMinimumMs).toISOString();
+  const reserves = db.prepare('SELECT cle, compte_id FROM banque_en_attente WHERE essais = -1 AND cree_le <= ?').all(limite);
+  for (const reserve of reserves) {
+    if (misesEnCours.has(reserve.cle)) continue;
+    const marketId = /^paris-annule-mise-(.+)-\d+$/.exec(reserve.cle)?.[1];
+    const miseLocale = db.prepare(`
+      SELECT 1 FROM bets JOIN comptes_banque ON comptes_banque.user_id = bets.user_id
+      WHERE bets.market_id = ? AND comptes_banque.compte_id = ?
+    `).get(marketId, reserve.compte_id);
+    if (miseLocale) db.prepare('DELETE FROM banque_en_attente WHERE cle = ?').run(reserve.cle);
+    else db.prepare('UPDATE banque_en_attente SET essais = 0 WHERE cle = ? AND essais = -1').run(reserve.cle);
+  }
 }
 
 async function sendPushNotifications(subscriptions, payload) {
@@ -269,12 +512,121 @@ function notifyPollResolved(marketId, title) {
   });
 }
 
-app.get('/api/me', (request, response) => {
+// banque / soldeDepart servent aussi aux visiteurs (feuille d'inscription : « 10 000 jetons offerts »).
+// En mode banque, on « touche » le compte (allocation du jour, renflouement) et on renvoie `verse`
+// pour que l'interface affiche un toast ; si la banque ne répond pas, on se replie sur le miroir.
+app.get('/api/me', async (request, response) => {
   const user = getUser(request);
-  response.json({ user: user ? publicUser(user) : null });
+  const extra = {
+    banque: Boolean(banque),
+    soldeDepart: banque ? soldeDepartBanque : soldeDepartLocal,
+    admin: false,
+    verse: [],
+  };
+  if (!user || !banque) return response.json({ user: user ? publicUser(user) : null, ...extra });
+  try {
+    const { status, data } = await banque.compte(user.compteId);
+    if (status === 200) {
+      miroir(user.compteId, data.solde);
+      if (data.actif === false) {
+        // Compte désactivé au poker : on ferme les sessions locales.
+        db.prepare('DELETE FROM sessions WHERE user_id = ?').run(user.id);
+        return response.json({ user: null, ...extra });
+      }
+      return response.json({
+        user: publicUser({ ...user, balance: soldeMiroir(data.solde) }),
+        ...extra,
+        admin: Boolean(data.admin),
+        verse: versesPropres(data.verse),
+      });
+    }
+  } catch (error) {
+    if (!(error instanceof BanqueIndisponible)) console.error(error);
+  }
+  response.json({ user: publicUser(user), ...extra });
 });
 
+// Inscription en mode banque : le code d'invitation local est validé comme avant, puis le compte
+// est créé à la banque (parrain = compte banque de l'invitant s'il est lié) et lié à une ligne locale.
+async function inscriptionBanque(request, response) {
+  const username = typeof request.body.username === 'string' ? request.body.username.trim() : '';
+  const password = typeof request.body.password === 'string' ? request.body.password : '';
+  const inviteCode = typeof request.body.inviteCode === 'string' ? request.body.inviteCode.trim().toUpperCase() : '';
+  const longueur = [...username].length;
+  if (longueur < 2 || longueur > 20) {
+    return response.status(400).json({ error: 'Le nom fait 2 à 20 caractères.' });
+  }
+  if (password.length < 8 || password.length > 128) {
+    return response.status(400).json({ error: 'Le mot de passe doit faire au moins 8 caractères.' });
+  }
+  if (!inviteCode) return response.status(400).json({ error: 'Un code d’invitation est requis.' });
+  const invite = db.prepare('SELECT code, created_by FROM invite_codes WHERE code = ? AND expires_at > ?')
+    .get(inviteCode, new Date().toISOString());
+  if (!invite) return response.status(400).json({ error: 'Ce code d’invitation est invalide ou expiré.' });
+  const parrain = invite.created_by
+    ? db.prepare('SELECT compte_id FROM comptes_banque WHERE user_id = ?').get(invite.created_by)?.compte_id ?? null
+    : null;
+
+  try {
+    const { status, data } = await banque.inscription(username, password, parrain);
+    if (status !== 201) {
+      // 400 (règles du poker) et 409 (« Ce pseudo est déjà pris ») sont affichées telles quelles.
+      return response.status([400, 409].includes(status) ? status : 502)
+        .json({ error: data.erreur ?? 'La banque a refusé l’inscription.' });
+    }
+    const userId = await lierCompte(data);
+    db.prepare('INSERT OR IGNORE INTO invite_redemptions (invite_code, user_id, redeemed_at) VALUES (?, ?, ?)')
+      .run(invite.code, userId, new Date().toISOString());
+    ouvrirSessionBanque(response, userId, data, 201);
+  } catch (error) {
+    if (error instanceof BanqueIndisponible) return response.status(503).json({ error: erreurBanqueInjoignable });
+    console.error(error);
+    response.status(500).json({ error: 'Impossible de créer votre compte.' });
+  }
+}
+
+// Connexion en mode banque : nom + mot de passe du poker. Un ancien compte local jamais lié
+// (la banque répond 401) est migré : s'il a le bon mot de passe local, on crée son compte à la
+// banque avec le même nom et le même mot de passe, puis on le lie.
+async function connexionBanque(response, identity, password) {
+  if (!identity || !password) return response.status(401).json({ error: 'Identifiants incorrects.' });
+  try {
+    const connexion = await banque.connexion(identity, password);
+    if (connexion.status === 200) {
+      const compte = connexion.data;
+      const dejaLie = db.prepare('SELECT 1 FROM comptes_banque WHERE compte_id = ?').get(compte.id);
+      // Même nom et même mot de passe qu'un ancien compte local non lié : on garde son historique.
+      const ancien = dejaLie ? null : await ancienCompteVerifie(compte.nom, password);
+      return ouvrirSessionBanque(response, await lierCompte(compte, ancien?.id ?? null), compte);
+    }
+    if (connexion.status !== 401) {
+      return response.status(connexion.status === 403 ? 403 : 502)
+        .json({ error: connexion.data.erreur ?? 'Connexion impossible.' });
+    }
+
+    const ancien = await ancienCompteVerifie(identity, password);
+    if (!ancien) return response.status(401).json({ error: connexion.data.erreur ?? 'Identifiants incorrects.' });
+    const inscription = await banque.inscription(ancien.username, password, null);
+    if (inscription.status === 201) {
+      return ouvrirSessionBanque(response, await lierCompte(inscription.data, ancien.id), inscription.data);
+    }
+    if (inscription.status === 409) {
+      return response.status(409).json({
+        error: `Le pseudo « ${ancien.username} » existe déjà au poker : connectez-vous avec le nom et le mot de passe du poker.`,
+      });
+    }
+    return response.status(inscription.status === 400 ? 400 : 502).json({
+      error: `Passage au compte commun avec le poker impossible : ${inscription.data.erreur ?? 'refus de la banque.'}`,
+    });
+  } catch (error) {
+    if (error instanceof BanqueIndisponible) return response.status(503).json({ error: erreurBanqueInjoignable });
+    console.error(error);
+    return response.status(500).json({ error: 'Connexion impossible.' });
+  }
+}
+
 app.post('/api/auth/register', async (request, response) => {
+  if (banque) return inscriptionBanque(request, response);
   const username = typeof request.body.username === 'string' ? request.body.username.trim() : '';
   const providedEmail = typeof request.body.email === 'string' ? request.body.email.trim().toLowerCase() : '';
   const password = typeof request.body.password === 'string' ? request.body.password : '';
@@ -329,6 +681,7 @@ app.post('/api/auth/register', async (request, response) => {
 app.post('/api/auth/login', async (request, response) => {
   const identity = typeof request.body.identity === 'string' ? request.body.identity.trim() : '';
   const password = typeof request.body.password === 'string' ? request.body.password : '';
+  if (banque) return connexionBanque(response, identity, password);
   // Les e-mails internes ne servent pas d'identifiant de connexion.
   const user = isInternalEmail(identity) ? undefined : db.prepare(`
     SELECT id, username, balance, password_hash FROM users
@@ -344,7 +697,7 @@ app.post('/api/auth/login', async (request, response) => {
 app.post('/api/auth/logout', (request, response) => {
   const token = getCookie(request, 'sid');
   if (token) db.prepare('DELETE FROM sessions WHERE token_hash = ?').run(digest(token));
-  response.clearCookie('sid', { httpOnly: true, sameSite: 'lax', path: '/' });
+  response.clearCookie('sid', { httpOnly: true, sameSite: 'lax', path: `${basePath}/` });
   response.json({ ok: true });
 });
 
@@ -654,9 +1007,10 @@ app.get('/api/activity', requireUser, (request, response) => {
   });
 });
 
-app.get('/api/leaderboard', requireUser, (request, response) => {
+app.get('/api/leaderboard', requireUser, async (request, response) => {
   const requestedLimit = Number(request.query.limit ?? 8);
   const limit = Number.isInteger(requestedLimit) ? Math.min(Math.max(requestedLimit, 1), 100) : 8;
+  if (banque) return response.json({ leaders: await classementBanque(limit) });
   // Les champs id, username, balance et wins sont ceux de l'ancienne API ;
   // volume, inPlay, pnl et positions sont des ajouts.
   const leaders = db.prepare(`
@@ -674,6 +1028,41 @@ app.get('/api/leaderboard', requireUser, (request, response) => {
     leaders: leaders.map((leader) => ({ ...leader, pnl: leader.balance + leader.inPlay - 1000 })),
   });
 });
+
+// Classement en mode banque : membres liés seulement, soldes lus en masse à la banque (sans
+// « toucher »), repli sur le miroir local si elle ne répond pas.
+async function classementBanque(limit) {
+  const rows = db.prepare(`
+    SELECT users.id, users.username, users.balance, users.created_at AS createdAt, comptes_banque.compte_id AS compteId,
+      (SELECT COUNT(*) FROM bets JOIN markets ON markets.id = bets.market_id
+       WHERE bets.user_id = users.id AND bets.choice_index = markets.outcome_index
+         AND markets.status = 'resolved') AS wins,
+      (SELECT COALESCE(SUM(amount), 0) FROM bets WHERE bets.user_id = users.id) AS volume,
+      (SELECT COUNT(*) FROM bets WHERE bets.user_id = users.id) AS positions,
+      (SELECT COALESCE(SUM(bets.amount), 0) FROM bets JOIN markets ON markets.id = bets.market_id
+       WHERE bets.user_id = users.id AND markets.status = 'open') AS inPlay
+    FROM users JOIN comptes_banque ON comptes_banque.user_id = users.id
+  `).all();
+  if (rows.length > 0) {
+    try {
+      const { status, data } = await banque.comptes(rows.map((row) => row.compteId));
+      if (status === 200 && Array.isArray(data.comptes)) {
+        const soldes = new Map(data.comptes.map((compte) => [compte.id, compte.solde]));
+        for (const row of rows) {
+          if (!soldes.has(row.compteId)) continue;
+          row.balance = soldeMiroir(soldes.get(row.compteId));
+          miroir(row.compteId, row.balance);
+        }
+      }
+    } catch (error) {
+      if (!(error instanceof BanqueIndisponible)) console.error(error);
+    }
+  }
+  return rows
+    .sort((first, second) => second.balance - first.balance || first.createdAt.localeCompare(second.createdAt))
+    .slice(0, limit)
+    .map(({ createdAt, compteId, ...leader }) => ({ ...leader, pnl: leader.balance + leader.inPlay - soldeDepartBanque }));
+}
 
 app.post('/api/markets', requireUser, (request, response) => {
   const { title, description, category, options, endsAt } = request.body;
@@ -738,11 +1127,108 @@ app.patch('/api/markets/:id', requireUser, (request, response) => {
   response.json({ ok: true });
 });
 
-app.post('/api/markets/:id/bets', requireUser, (request, response) => {
+// Cote verrouillée au moment de l'ordre : (prises totales + nb d'issues) / (prises sur l'issue + 1).
+function lockedOdds(marketId, choiceIndex, optionCount) {
+  const pickCounts = db.prepare(`
+    SELECT COUNT(*) AS total, SUM(CASE WHEN choice_index = ? THEN 1 ELSE 0 END) AS selected
+    FROM bets WHERE market_id = ?
+  `).get(choiceIndex, marketId);
+  return Number(((pickCounts.total + optionCount) / ((pickCounts.selected ?? 0) + 1)).toFixed(2));
+}
+
+// Mise en mode banque : débit à la banque d'abord, puis transaction locale (une prise par marché,
+// cote figée). Une réserve (essais = -1) est posée avant le débit : elle sert de verrou et, si la
+// transaction locale échoue ou si le serveur s'arrête entre les deux, devient le crédit compensatoire.
+async function miserViaBanque(request, response, market, optionCount, choiceIndex, amount) {
+  const user = request.user;
+  if (db.prepare('SELECT 1 FROM bets WHERE market_id = ? AND user_id = ?').get(market.id, user.id)) {
+    return response.status(409).json({ error: 'Vous avez déjà une position sur ce marché.' });
+  }
+  const cleMise = `paris-mise-${market.id}-${user.compteId}`;
+  const cleAnnule = `paris-annule-mise-${market.id}-${user.compteId}`;
+  if (misesEnCours.has(cleAnnule)) return response.status(409).json({ error: 'Une mise est déjà en cours sur ce marché.' });
+  misesEnCours.add(cleAnnule);
+  try {
+    const reserve = db.prepare('SELECT montant, essais FROM banque_en_attente WHERE cle = ?').get(cleAnnule);
+    if (reserve && reserve.essais >= 0) return response.status(409).json({ error: erreurMiseAnnulee });
+    if (reserve && reserve.montant !== amount) {
+      return response.status(409).json({
+        error: `Une mise de ${reserve.montant} jetons sur ce marché attend la confirmation du poker : réessayez avec ce montant, ou dans quelques minutes.`,
+      });
+    }
+    if (!reserve) {
+      db.prepare(`
+        INSERT INTO banque_en_attente (cle, compte_id, montant, motif, cree_le, essais) VALUES (?, ?, ?, ?, ?, -1)
+      `).run(cleAnnule, user.compteId, amount, `Paris : remboursement — ${market.title}`, new Date().toISOString());
+    }
+    const supprimerReserve = () => db.prepare('DELETE FROM banque_en_attente WHERE cle = ? AND essais = -1').run(cleAnnule);
+    const activerReserve = () => db.prepare('UPDATE banque_en_attente SET essais = 0 WHERE cle = ? AND essais = -1').run(cleAnnule);
+
+    let debit;
+    try {
+      debit = await banque.mouvement({
+        compte: user.compteId, montant: -amount, motif: `Paris : mise — ${market.title}`, cle: cleMise,
+      });
+    } catch (error) {
+      // Débit incertain : la réserve reste en place. Un nouvel essai du même montant réutilise la
+      // même clé (sans double débit) ; sinon la réserve sera rendue au bout de quelques minutes.
+      if (error instanceof BanqueIndisponible) {
+        return response.status(503).json({ error: 'Le poker (banque des jetons) ne répond pas : mise non confirmée. Réessayez dans un instant.' });
+      }
+      throw error;
+    }
+    if (debit.status !== 200) {
+      supprimerReserve();
+      if (debit.status === 409 && debit.data.erreur === 'Solde insuffisant') {
+        return response.status(400).json({ error: 'Solde insuffisant pour cette mise.' });
+      }
+      // « Clé déjà utilisée » : une mise antérieure a été débitée puis annulée.
+      if (debit.status === 409) return response.status(409).json({ error: erreurMiseAnnulee });
+      return response.status(debit.status === 400 ? 400 : 502).json({ error: debit.data.erreur ?? 'Mise refusée par la banque.' });
+    }
+    if (debit.data.deja_fait && !reserve) {
+      // Débit déjà appliqué par une tentative antérieure qui n'a pas abouti : il est (ou sera) rendu.
+      activerReserve();
+      await viderFileBanque();
+      return response.status(409).json({ error: erreurMiseAnnulee });
+    }
+
+    try {
+      db.transaction(() => {
+        if (db.prepare('SELECT 1 FROM bets WHERE market_id = ? AND user_id = ?').get(market.id, user.id)) {
+          throw httpError(409, 'Vous avez déjà une position sur ce marché.');
+        }
+        db.prepare(`
+          INSERT INTO bets (market_id, user_id, choice_index, amount, decimal_odds, created_at)
+          VALUES (?, ?, ?, ?, ?, ?)
+        `).run(market.id, user.id, choiceIndex, amount, lockedOdds(market.id, choiceIndex, optionCount), new Date().toISOString());
+        supprimerReserve();
+        // Pas de débit local : users.balance reflète le solde renvoyé par la banque.
+        db.prepare('UPDATE users SET balance = ? WHERE id = ?').run(soldeMiroir(debit.data.solde), user.id);
+      })();
+    } catch (error) {
+      // La banque a débité mais la mise locale a échoué : crédit compensatoire (paris-annule-mise-…).
+      activerReserve();
+      await viderFileBanque();
+      if (error.status) return response.status(error.status).json({ error: error.message });
+      if (error.code === 'SQLITE_CONSTRAINT_UNIQUE') return response.status(409).json({ error: 'Vous avez déjà une position sur ce marché.' });
+      console.error(error);
+      return response.status(500).json({ error: 'Impossible de passer l’ordre.' });
+    }
+    response.json({ user: publicUser(db.prepare('SELECT id, username, balance FROM users WHERE id = ?').get(user.id)) });
+  } finally {
+    misesEnCours.delete(cleAnnule);
+  }
+}
+
+app.post('/api/markets/:id/bets', requireUser, async (request, response) => {
   const choiceIndex = Number(request.body.choiceIndex);
   const amount = Number(request.body.amount);
   const market = db.prepare('SELECT * FROM markets WHERE id = ?').get(request.params.id);
   if (!market) return response.status(404).json({ error: 'Marché introuvable.' });
+  if (market.creator_id === request.user.id) {
+    return response.status(403).json({ error: 'Vous avez créé ce marché : vous ne pouvez pas miser dessus, c’est vous qui le résolvez.' });
+  }
   if (market.status !== 'open' || Date.parse(market.ends_at) <= Date.now()) {
     return response.status(400).json({ error: 'Ce marché n’accepte plus de prises.' });
   }
@@ -751,20 +1237,16 @@ app.post('/api/markets/:id/bets', requireUser, (request, response) => {
     return response.status(400).json({ error: 'Choisissez une des issues proposées.' });
   }
   if (!Number.isSafeInteger(amount) || amount < 1 || amount > 100_000) {
-    return response.status(400).json({ error: 'Misez un nombre entier de crédits entre 1 et 100 000.' });
+    return response.status(400).json({ error: 'Misez un nombre entier de jetons entre 1 et 100 000.' });
   }
+  if (banque) return miserViaBanque(request, response, market, options.length, choiceIndex, amount);
 
   try {
     db.transaction(() => {
       if (db.prepare('SELECT 1 FROM bets WHERE market_id = ? AND user_id = ?').get(market.id, request.user.id)) {
         throw Object.assign(new Error('Vous avez déjà une position sur ce marché.'), { status: 409 });
       }
-      const pickCounts = db.prepare(`
-        SELECT COUNT(*) AS total, SUM(CASE WHEN choice_index = ? THEN 1 ELSE 0 END) AS selected
-        FROM bets WHERE market_id = ?
-      `).get(choiceIndex, market.id);
-      const selectedCount = pickCounts.selected ?? 0;
-      const decimalOdds = Number(((pickCounts.total + options.length) / (selectedCount + 1)).toFixed(2));
+      const decimalOdds = lockedOdds(market.id, choiceIndex, options.length);
       const debit = db.prepare('UPDATE users SET balance = balance - ? WHERE id = ? AND balance >= ?')
         .run(amount, request.user.id, amount);
       if (debit.changes !== 1) throw Object.assign(new Error('Solde insuffisant pour cette mise.'), { status: 400 });
@@ -782,8 +1264,26 @@ app.post('/api/markets/:id/bets', requireUser, (request, response) => {
   response.json({ user: publicUser(db.prepare('SELECT id, username, balance FROM users WHERE id = ?').get(request.user.id)) });
 });
 
-app.post('/api/markets/:id/resolve', requireUser, (request, response) => {
+// Paiement d'un gain ou d'un remboursement, appelé dans la transaction locale. En mode banque,
+// le mouvement est mis en file (clé déterministe) puis envoyé après la transaction ; un membre
+// jamais lié à la banque (mise d'avant le mode banque) est crédité localement, comme avant.
+function payer(userId, montant, { cle, motif }) {
+  const lien = banque && db.prepare('SELECT compte_id FROM comptes_banque WHERE user_id = ?').get(userId);
+  if (lien) {
+    mettreEnFile(`${cle}-${lien.compte_id}`, lien.compte_id, montant, motif);
+    return true;
+  }
+  return db.prepare('UPDATE users SET balance = balance + ? WHERE id = ?').run(montant, userId).changes === 1;
+}
+
+app.post('/api/markets/:id/resolve', requireUser, async (request, response) => {
   const outcomeIndex = Number(request.body.outcomeIndex);
+  const target = db.prepare('SELECT creator_id FROM markets WHERE id = ?').get(request.params.id);
+  if (!target) return response.status(404).json({ error: 'Marché introuvable.' });
+  // Seul le créateur résout son marché (en mode banque, un admin de la banque aussi).
+  if (target.creator_id !== request.user.id && !(await estAdminBanque(request.user))) {
+    return response.status(403).json({ error: 'Seul le créateur du marché peut le résoudre.' });
+  }
   let resolvedTitle;
   try {
     db.transaction(() => {
@@ -798,9 +1298,10 @@ app.post('/api/markets/:id/resolve', requireUser, (request, response) => {
         .run(outcomeIndex, market.id);
       const winners = db.prepare('SELECT user_id, amount, decimal_odds FROM bets WHERE market_id = ? AND choice_index = ?')
         .all(market.id, outcomeIndex);
-      const credit = db.prepare('UPDATE users SET balance = balance + ? WHERE id = ?');
       for (const winner of winners) {
-        credit.run(Math.floor(winner.amount * winner.decimal_odds), winner.user_id);
+        payer(winner.user_id, Math.floor(winner.amount * winner.decimal_odds), {
+          cle: `paris-gain-${market.id}`, motif: `Paris : gain — ${market.title}`,
+        });
       }
       resolvedTitle = market.title;
     })();
@@ -809,11 +1310,12 @@ app.post('/api/markets/:id/resolve', requireUser, (request, response) => {
     console.error(error);
     return response.status(500).json({ error: 'Impossible de résoudre ce marché.' });
   }
+  await viderFileBanque();
   notifyPollResolved(request.params.id, resolvedTitle);
   response.json({ user: publicUser(db.prepare('SELECT id, username, balance FROM users WHERE id = ?').get(request.user.id)) });
 });
 
-app.post('/api/markets/:id/cancel', requireUser, (request, response) => {
+app.post('/api/markets/:id/cancel', requireUser, async (request, response) => {
   try {
     const result = db.transaction(() => {
       const market = db.prepare('SELECT id, creator_id, status FROM markets WHERE id = ?').get(request.params.id);
@@ -826,9 +1328,9 @@ app.post('/api/markets/:id/cancel', requireUser, (request, response) => {
       }
 
       const bets = db.prepare('SELECT user_id, amount FROM bets WHERE market_id = ?').all(market.id);
-      const refund = db.prepare('UPDATE users SET balance = balance + ? WHERE id = ?');
+      const { title } = db.prepare('SELECT title FROM markets WHERE id = ?').get(market.id);
       for (const bet of bets) {
-        if (refund.run(bet.amount, bet.user_id).changes !== 1) {
+        if (!payer(bet.user_id, bet.amount, { cle: `paris-rembourse-${market.id}`, motif: `Paris : remboursement — ${title}` })) {
           throw new Error(`Could not refund user ${bet.user_id} for market ${market.id}.`);
         }
       }
@@ -843,6 +1345,7 @@ app.post('/api/markets/:id/cancel', requireUser, (request, response) => {
         refundedCallers: bets.length,
       };
     })();
+    await viderFileBanque();
     response.json({
       ...result,
       user: publicUser(db.prepare('SELECT id, username, balance FROM users WHERE id = ?').get(request.user.id)),
@@ -863,5 +1366,16 @@ if (fs.existsSync(buildDirectory)) {
 }
 
 app.listen(port, () => {
-  console.log(`${brand.name} API listening on http://localhost:${port}`);
+  console.log(`${brand.name} API listening on http://localhost:${port}${banque ? ' (mode banque : jetons communs avec le poker)' : ''}`);
 });
+
+// File banque : rejouée au démarrage puis toutes les ~30 s jusqu'au succès. Au démarrage, aucune
+// mise n'est en cours, donc toutes les réserves restantes sont orphelines.
+if (banque) {
+  activerReservesOrphelines(0);
+  void viderFileBanque();
+  setInterval(() => {
+    activerReservesOrphelines(5 * 60_000);
+    void viderFileBanque();
+  }, relanceBanqueMs).unref();
+}

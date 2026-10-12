@@ -1,6 +1,6 @@
 # DUyka PARIS
 
-Un marché de prédiction entre amis, joué en crédits virtuels, dans le style de Polymarket et Kalshi. Les membres créent des marchés (oui/non ou à choix multiples), prennent position avec des crédits virtuels, suivent l'évolution des probabilités, commentent, et le résultat est réglé une fois l'événement passé.
+Un marché de prédiction entre amis, joué en jetons virtuels, dans le style de Polymarket et Kalshi. Les membres créent des marchés (oui/non ou à choix multiples), prennent position avec leurs jetons (communs avec le poker en mode banque, voir plus bas), suivent l'évolution des probabilités, commentent, et le résultat est réglé une fois l'événement passé.
 
 Le nom du site est défini une seule fois dans `brand.config.json` (`name`, `wordmark`, `tagline`, `description`). Après une modification, relancez `npm run build` et redémarrez le serveur.
 
@@ -36,6 +36,8 @@ Le serveur Express sert le site compilé (`dist/`) et l'API sur le port 3001.
 | `NODE_ENV` | `production` rend les cookies de session `secure` (HTTPS obligatoire) | non défini |
 | `INITIAL_INVITE_CODE` | Code d'invitation d'amorçage (6 à 32 lettres, chiffres ou tirets), utilisé seulement si la base est vide | généré au hasard |
 | `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY`, `VAPID_SUBJECT` | Notifications push : les trois ensemble, ou aucune | non défini |
+| `BANQUE_URL`, `BANQUE_SECRET` | Mode banque (jetons communs avec le poker) : actif seulement si les deux sont définis | non défini |
+| `BANQUE_RELANCE_MS` | Intervalle de rejeu de la file des mouvements banque | `30000` |
 
 Le dossier `data/` contient toutes les données : ne le supprimez jamais et incluez-le dans vos sauvegardes.
 
@@ -70,17 +72,27 @@ Les membres connectés peuvent activer les notifications push depuis **Alertes**
 
 Générez une paire de clés VAPID avec `npx web-push generate-vapid-keys`, puis définissez `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY` et `VAPID_SUBJECT` (par exemple une adresse `mailto:` de l'administrateur) dans l'environnement du service Node. Gardez la clé privée secrète et hors du dépôt, et redémarrez le serveur après modification. Conservez ces clés lors des migrations : des clés différentes invalident les abonnements existants.
 
-## Règles des crédits
+## Règles des jetons
 
-- Un nouveau compte reçoit 1 000 crédits virtuels.
+- Un nouveau compte reçoit 1 000 jetons virtuels (10 000 en mode banque, sur le compte poker).
 - Chaque inscription demande un code d'invitation non expiré (nom + mot de passe d'au moins 6 caractères) ; un code est réutilisable jusqu'à son expiration.
-- Un membre, créateur du marché compris, peut prendre une seule position par marché, d'un montant entier, dans la limite de son solde disponible.
+- Un membre peut prendre une seule position par marché, d'un montant entier, dans la limite de son solde disponible. Le créateur d'un marché ne peut pas y miser (403) : c'est lui qui le résout.
 - Le créateur peut modifier la question, la description, la catégorie et la clôture tant que le marché n'est pas résolu ; les issues restent figées.
 - Le créateur peut annuler un marché non résolu : chaque participant est remboursé de sa mise, et le marché annulé ainsi que les positions restent visibles.
 - Chaque issue affiche une cote décimale calculée à partir du nombre de prises : `(prises totales + nombre d'issues) / (prises sur l'issue + 1)`. Une prise fictive par issue au départ garde la cote définie quand le marché est vide.
-- La cote est figée au moment de la prise : les prises suivantes ne changent pas le gain. La mise est débitée immédiatement ; une prise gagnante rapporte `mise × cote figée`, en crédits entiers arrondis à l'inférieur. Les mises perdantes ne sont pas rendues.
-- Tout membre connecté peut désigner le résultat à tout moment, y compris avant la clôture. La première résolution réussie règle le marché et paie les gagnants.
-- Les crédits n'ont aucune valeur monétaire et ne peuvent être ni déposés ni retirés.
+- La cote est figée au moment de la prise : les prises suivantes ne changent pas le gain. La mise est débitée immédiatement ; une prise gagnante rapporte `mise × cote figée`, en jetons entiers arrondis à l'inférieur. Les mises perdantes ne sont pas rendues.
+- Seul le créateur du marché (ou, en mode banque, un admin de la banque) désigne le résultat, à tout moment, y compris avant la clôture. La résolution est définitive et paie les gagnants.
+- Les jetons n'ont aucune valeur monétaire et ne peuvent être ni déposés ni retirés.
+
+## Économie commune avec le poker
+
+Avec `BANQUE_URL` et `BANQUE_SECRET` définis, le site passe en **mode banque** : le poker (poker.dyuka.com) est la banque et la source des comptes. Un seul compte (nom + mot de passe du poker) et un seul solde pour les deux sites ; 10 000 jetons à l'inscription, 250 jetons d'allocation par jour (versés à la première visite de la journée, avec un petit toast) et un renflouement de 2 000 si le solde tombe sous 100. Sans ces variables, le site fonctionne en autonome, comme avant.
+
+- **Connexion / inscription** : elles passent par l'API interne du poker (`/interne/banque/`, en-tête `Authorization: Bearer`). Chaque compte banque est lié à une ligne locale `users` via la table `comptes_banque` (pseudo = nom poker, accents, points et espaces acceptés ; suffixe `-2`… si un ancien compte local non lié porte déjà ce nom). Les règles du poker s'appliquent : nom de 2 à 20 caractères, mot de passe d'au moins 8. L'inscription reste sur invitation ; l'invitant devient le parrain à la banque.
+- **Anciens comptes locaux** : à la première connexion, si le poker ne connaît pas le nom mais que le mot de passe local est bon, le compte est créé au poker avec le même nom et le même mot de passe, puis lié (l'historique de mises est conservé). Si le nom existe déjà au poker, il faut se connecter avec les identifiants du poker. Un mot de passe local de moins de 8 caractères ne peut pas être migré tel quel.
+- **Solde** : `users.balance` devient un miroir du solde banque, mis à jour après chaque appel (l'ancienne version et les replis le lisent). Si le poker ne répond pas, les pages s'affichent avec le miroir ; mises, connexions et inscriptions sont refusées avec un message clair.
+- **Mises** : débit à la banque d'abord (clé `paris-mise-<marché>-<compte>`), puis mise locale ; si la mise locale échoue, un crédit compensatoire `paris-annule-mise-…` est envoyé. **Gains et remboursements** : mis en file dans `banque_en_attente` dans la même transaction que la résolution ou l'annulation, envoyés aussitôt, puis rejoués toutes les 30 s et au démarrage jusqu'au succès (clés déterministes : un rejeu ne paie jamais deux fois).
+- Interface : « jetons » partout, lien **Poker** dans le menu, mention « Solde commun poker + paris » sous le solde.
 
 ### Affichage en prix et en probabilité
 

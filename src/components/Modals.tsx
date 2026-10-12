@@ -2,8 +2,9 @@ import { useEffect, useState } from 'react';
 import { Check, Copy, Minus, Plus, Share2, X } from 'lucide-react';
 import { request } from '../api';
 import type { Invite, InvitePreview, Market, MarketValues, NotificationPreferences, NotificationSettings } from '../api';
-import { categories, categoryLabels, dateTime, localDateTime } from '../format';
+import { categories, categoryLabels, credits, dateTime, localDateTime } from '../format';
 import brand from '../brand';
+import { BASE } from '../router';
 import { Logo, Wordmark } from './Logo';
 
 export function Modal({
@@ -47,12 +48,16 @@ type PreviewState = { status: 'loading' } | { status: 'error' } | ({ status: 'do
 
 export function AuthModal({
   mode,
+  banque,
+  soldeDepart,
   initialInviteCode,
   onModeChange,
   onClose,
   onSubmit,
 }: {
   mode: AuthMode;
+  banque: boolean;
+  soldeDepart: number;
   initialInviteCode: string;
   onModeChange: (mode: AuthMode) => void;
   onClose: () => void;
@@ -98,7 +103,7 @@ export function AuthModal({
       <div className="auth-head">
         <Logo size={44} />
         <h2>Content de vous revoir</h2>
-        <p>Connectez-vous pour retrouver vos positions.</p>
+        <p>Connectez-vous pour retrouver vos positions.{banque && ' Même compte que le poker.'}</p>
       </div>
     );
   } else if (invalidLink) {
@@ -114,7 +119,7 @@ export function AuthModal({
       <div className="auth-head">
         <Logo size={44} />
         <h2>{inviter ? <><strong className="auth-inviter">{inviter}</strong> t’invite sur <Wordmark /></> : <>Rejoindre <Wordmark /></>}</h2>
-        <p>Choisissez un nom et un mot de passe. 1 000 crédits offerts à l’arrivée.</p>
+        <p>Choisissez un nom et un mot de passe. {credits(soldeDepart)} offerts à l’arrivée.</p>
       </div>
     );
   } else {
@@ -122,7 +127,7 @@ export function AuthModal({
       <div className="auth-head">
         <Logo size={44} />
         <h2>Rejoindre <Wordmark /></h2>
-        <p>Inscription sur invitation. 1 000 crédits offerts à l’arrivée.</p>
+        <p>Inscription sur invitation. {credits(soldeDepart)} offerts à l’arrivée.</p>
       </div>
     );
   }
@@ -152,19 +157,19 @@ export function AuthModal({
                   autoCorrect="off"
                   spellCheck={false}
                   name="username"
-                  minLength={3}
+                  minLength={banque ? 2 : 3}
                   maxLength={20}
-                  pattern="[A-Za-z0-9_]{3,20}"
-                  title="3 à 20 lettres, chiffres ou _"
+                  pattern={banque ? undefined : '[A-Za-z0-9_]{3,20}'}
+                  title={banque ? '2 à 20 caractères' : '3 à 20 lettres, chiffres ou _'}
                   required
                 />
-                <span className="field-hint">3 à 20 lettres, chiffres ou _</span>
+                <span className="field-hint">{banque ? '2 à 20 caractères (lettres, accents, espaces et points acceptés) · même nom qu’au poker' : '3 à 20 lettres, chiffres ou _'}</span>
               </label>
             </>
           ) : (
             <label>Nom ou e-mail<input autoComplete="username" autoCapitalize="none" autoCorrect="off" spellCheck={false} name="identity" required /></label>
           )}
-          <label>Mot de passe<input autoComplete={register ? 'new-password' : 'current-password'} name="password" type="password" minLength={register ? 6 : undefined} maxLength={128} placeholder={register ? '6 caractères minimum' : ''} required /></label>
+          <label>Mot de passe<input autoComplete={register ? 'new-password' : 'current-password'} name="password" type="password" minLength={register ? (banque ? 8 : 6) : undefined} maxLength={128} placeholder={register ? `${banque ? 8 : 6} caractères minimum` : ''} required /></label>
           {error && <p className="form-error" role="alert">{error}</p>}
           <button className="btn btn-primary btn-block" type="submit" disabled={busy}>
             {busy ? 'Un instant…' : register ? 'Créer mon compte' : 'Se connecter'}
@@ -174,13 +179,13 @@ export function AuthModal({
       {register && fromLink && (
         <button className="auth-switch" type="button" onClick={() => switchTo('login')}>J’ai déjà un compte</button>
       )}
-      <p className="modal-fineprint">Crédits virtuels uniquement : aucun dépôt, aucun retrait.</p>
+      <p className="modal-fineprint">Jetons virtuels uniquement : aucun dépôt, aucun retrait.</p>
     </Modal>
   );
 }
 
 function inviteUrl(code: string) {
-  return `${window.location.origin}/?invite=${encodeURIComponent(code)}`;
+  return `${window.location.origin}${BASE}/?invite=${encodeURIComponent(code)}`;
 }
 
 export function InviteModal({ onClose }: { onClose: () => void }) {
@@ -299,7 +304,7 @@ export function NotificationsModal({ onClose }: { onClose: () => void }) {
       }
       const permission = Notification.permission === 'default' ? await Notification.requestPermission() : Notification.permission;
       if (permission !== 'granted') throw new Error('Autorisez les notifications dans les réglages du navigateur.');
-      const registration = await navigator.serviceWorker.register('/sw.js');
+      const registration = await navigator.serviceWorker.register(`${BASE}/sw.js`, { scope: `${BASE}/` });
       await navigator.serviceWorker.ready;
       const next = await registration.pushManager.getSubscription()
         ?? await registration.pushManager.subscribe({
@@ -520,7 +525,7 @@ export function MarketFormModal({
   );
 }
 
-export function HowItWorksModal({ onClose }: { onClose: () => void }) {
+export function HowItWorksModal({ banque, soldeDepart, onClose }: { banque: boolean; soldeDepart: number; onClose: () => void }) {
   const steps = [
     {
       title: 'Choisissez un marché',
@@ -528,7 +533,7 @@ export function HowItWorksModal({ onClose }: { onClose: () => void }) {
     },
     {
       title: 'Achetez une issue',
-      body: 'Le prix (par exemple 62¢) est le coût d’une part qui rapporte 1 crédit si l’issue gagne. Votre cote est verrouillée au moment de l’ordre ; les prises suivantes ne la changent pas.',
+      body: 'Le prix (par exemple 62¢) est le coût d’une part qui rapporte 1 jeton si l’issue gagne. Votre cote est verrouillée au moment de l’ordre ; les prises suivantes ne la changent pas.',
     },
     {
       title: 'Encaissez si vous avez raison',
@@ -546,7 +551,7 @@ export function HowItWorksModal({ onClose }: { onClose: () => void }) {
           </li>
         ))}
       </ol>
-      <p className="modal-fineprint">Chaque compte démarre avec 1 000 crédits virtuels, sans valeur monétaire. Tout membre connecté peut résoudre un marché ; la première résolution est définitive.</p>
+      <p className="modal-fineprint">Chaque compte démarre avec {credits(soldeDepart)}, sans valeur monétaire. {banque && 'Le solde est commun avec le poker, avec une allocation de 250 jetons par jour. '}Le créateur d’un marché le résout (et ne peut pas y miser) ; la résolution est définitive.</p>
       <button className="btn btn-primary btn-block" onClick={onClose}>Compris</button>
     </Modal>
   );

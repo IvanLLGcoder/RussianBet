@@ -8,7 +8,7 @@ cd "$(dirname "$0")/.."
 SERVEUR=hermes-ivan
 DOSSIER=/home/evg/ivan/gamble                     # src/ (code), donnees/ (base SQLite), compose.yaml
 SAUVEGARDES=/home/evg/ivan/gamble-deploiements    # une copie horodatée de la base avant chaque rebuild
-URL_PUBLIQUE=https://gamble.dyuka.com
+URL_PUBLIQUE=${URL_PUBLIQUE:-https://poker.dyuka.com/paris}   # provisoire, en attendant gamble.dyuka.com
 
 # 1. Tests locaux : on n'envoie rien si ça casse.
 npm test

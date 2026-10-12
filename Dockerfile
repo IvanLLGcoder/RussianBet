@@ -10,6 +10,8 @@ RUN npm ci --no-audit --no-fund
 COPY . .
 # « tsc -b && vite build » produit dist/ ; on retire ensuite les dépendances de développement
 # (le binaire natif de better-sqlite3 reste dans node_modules).
+# Sous-chemin de publication (ex. /paris) : figé dans les URL du build Vite.
+ARG BASE_PATH=""
 RUN npm run build && npm prune --omit=dev
 
 # ---- Étape 2 : image d'exécution ----

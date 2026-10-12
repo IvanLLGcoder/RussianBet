@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import {
-  Bell, ChevronDown, Clock3, Flame, House, Info, LogOut, Moon, Plus, Search, Sparkles, Sun, Trophy, UserRoundPlus, WalletMinimal, X,
+  Bell, ChevronDown, Clock3, Flame, House, Info, LogOut, Moon, Plus, Search, Sparkles, Spade, Sun, Trophy, UserRoundPlus, WalletMinimal, X,
 } from 'lucide-react';
 import type { Market, User } from '../api';
 import brand from '../brand';
@@ -99,6 +99,7 @@ function SearchBox({
 
 function UserMenu({
   user,
+  banque,
   theme,
   onTheme,
   onInvite,
@@ -107,6 +108,7 @@ function UserMenu({
   onSignOut,
 }: {
   user: User;
+  banque: boolean;
   theme: 'light' | 'dark';
   onTheme: () => void;
   onInvite: () => void;
@@ -138,7 +140,7 @@ function UserMenu({
         <div className="menu" role="menu">
           <div className="menu-head">
             <Avatar name={user.username} size={36} />
-            <div><strong>{user.username}</strong><small>{credits(user.balance)} disponibles</small></div>
+            <div><strong>{user.username}</strong><small>{credits(user.balance)} disponibles</small>{banque && <small className="balance-sub">Solde commun poker + paris</small>}</div>
           </div>
           {item(<WalletMinimal size={16} />, 'Portefeuille', () => navigate('/portfolio'), true)}
           {item(<Trophy size={16} />, 'Classement', () => navigate('/leaderboard'), true)}
@@ -146,6 +148,7 @@ function UserMenu({
           {item(<Bell size={16} />, 'Notifications', onNotifications)}
           {item(theme === 'dark' ? <Sun size={16} /> : <Moon size={16} />, theme === 'dark' ? 'Mode clair' : 'Mode sombre', onTheme)}
           {item(<Info size={16} />, 'Comment ça marche', onHelp)}
+          <a role="menuitem" href="https://poker.dyuka.com" rel="noopener"><Spade size={16} />Poker</a>
           <div className="menu-divider" />
           {item(<LogOut size={16} />, 'Se déconnecter', onSignOut)}
         </div>
@@ -156,6 +159,7 @@ function UserMenu({
 
 export function Header({
   user,
+  banque,
   markets,
   portfolioValue,
   route,
@@ -173,6 +177,7 @@ export function Header({
   onSignOut,
 }: {
   user: User | null;
+  banque: boolean;
   markets: Market[];
   portfolioValue: number;
   route: Route;
@@ -215,10 +220,12 @@ export function Header({
             <a className="topbar-stat" {...linkProps('/portfolio')}>
               <small>Solde</small>
               <b>{credits(user.balance)}</b>
+              {banque && <small className="balance-sub">Solde commun poker + paris</small>}
             </a>
             <button className="btn btn-primary btn-create" onClick={onCreate}><Plus size={16} /> <span>Créer</span></button>
             <UserMenu
               user={user}
+              banque={banque}
               theme={theme}
               onTheme={onTheme}
               onInvite={onInvite}

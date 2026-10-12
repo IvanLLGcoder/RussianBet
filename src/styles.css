@@ -181,9 +181,10 @@ input, select, textarea { font-variant-numeric: tabular-nums; }
 .menu-head { display: flex; align-items: center; gap: 10px; padding: 10px; }
 .menu-head strong { display: block; }
 .menu-head small { color: var(--text-3); }
-.menu button { width: 100%; display: flex; align-items: center; gap: 10px; padding: 9px 10px; border-radius: 8px; font-weight: 550; color: var(--text); }
-.menu button svg { color: var(--text-2); }
-.menu button:hover { background: var(--surface-2); }
+.menu button, .menu a { width: 100%; display: flex; align-items: center; gap: 10px; padding: 9px 10px; border-radius: 8px; font-weight: 550; color: var(--text); }
+.menu button svg, .menu a svg { color: var(--text-2); }
+.menu button:hover, .menu a:hover { background: var(--surface-2); }
+.menu small.balance-sub, .topbar-stat small.balance-sub { display: block; font-size: 11px; font-weight: 400; opacity: .85; }
 .menu-divider { height: 1px; background: var(--border); margin: 6px 4px; }
 
 .network-alert {

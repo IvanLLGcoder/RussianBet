@@ -6,7 +6,20 @@ export type Route =
   | { name: 'portfolio' }
   | { name: 'leaderboard' };
 
-function parse(pathname: string): Route {
+// Préfixe de publication (ex. « /paris » quand le site est servi sous poker.dyuka.com/paris/), vide sinon.
+export const BASE = import.meta.env.BASE_URL.replace(/\/$/, '');
+
+// Les chemins internes de l'app restent sans préfixe (« /market/… ») ; on l'ajoute pour le navigateur.
+export function withBase(path: string) {
+  return BASE + path;
+}
+
+function stripBase(pathname: string) {
+  return BASE && pathname.startsWith(BASE) ? pathname.slice(BASE.length) || '/' : pathname;
+}
+
+function parse(fullPathname: string): Route {
+  const pathname = stripBase(fullPathname);
   const market = pathname.match(/^\/market\/([^/]+)\/?$/);
   if (market) return { name: 'market', id: decodeURIComponent(market[1]) };
   if (pathname.startsWith('/portfolio')) return { name: 'portfolio' };
@@ -15,8 +28,8 @@ function parse(pathname: string): Route {
 }
 
 export function navigate(path: string) {
-  if (path === window.location.pathname + window.location.search) return;
-  window.history.pushState(null, '', path);
+  if (withBase(path) === window.location.pathname + window.location.search) return;
+  window.history.pushState(null, '', withBase(path));
   window.dispatchEvent(new PopStateEvent('popstate'));
   window.scrollTo({ top: 0 });
 }
@@ -34,7 +47,7 @@ export function useRoute() {
 // Lien interne : garde le clic-molette / Cmd+clic natifs, navigue sans recharger sinon.
 export function linkProps(path: string) {
   return {
-    href: path,
+    href: withBase(path),
     onClick: (event: React.MouseEvent) => {
       if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey) return;
       event.preventDefault();

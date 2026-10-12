@@ -4,23 +4,26 @@ import brand from './brand.config.json';
 
 // Le nom du site est défini une seule fois dans brand.config.json :
 // ce plugin l'injecte dans index.html et génère le manifeste de l'app installable.
+// BASE_PATH (ex. « /paris ») publie le site sous un sous-chemin ; vide = racine du domaine.
+const base = `${(process.env.BASE_PATH ?? '').replace(/\/+$/, '')}/`;
+
 function brandPlugin(): Plugin {
   const manifest = JSON.stringify({
-    id: '/',
+    id: base,
     name: `${brand.name} — ${brand.tagline}`,
     short_name: brand.name,
     description: brand.description,
     lang: 'fr',
-    start_url: '/',
-    scope: '/',
+    start_url: base,
+    scope: base,
     display: 'standalone',
     orientation: 'any',
     background_color: '#ffffff',
     theme_color: '#1652f0',
     icons: [
-      { src: '/icon-192.png', sizes: '192x192', type: 'image/png', purpose: 'any' },
-      { src: '/icon-512.png', sizes: '512x512', type: 'image/png', purpose: 'any' },
-      { src: '/maskable-512.png', sizes: '512x512', type: 'image/png', purpose: 'maskable' },
+      { src: `${base}icon-192.png`, sizes: '192x192', type: 'image/png', purpose: 'any' },
+      { src: `${base}icon-512.png`, sizes: '512x512', type: 'image/png', purpose: 'any' },
+      { src: `${base}maskable-512.png`, sizes: '512x512', type: 'image/png', purpose: 'maskable' },
     ],
   }, null, 2);
 
@@ -43,6 +46,7 @@ function brandPlugin(): Plugin {
 }
 
 export default defineConfig({
+  base,
   plugins: [react(), brandPlugin()],
   server: {
     proxy: {

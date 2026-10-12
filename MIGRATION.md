@@ -261,13 +261,24 @@ sudo systemctl start "$SERVICE"
 - **Cote affichée** : la cote décimale stockée en base ne change pas ; l'interface l'affiche en probabilité et en prix en centimes (≈ 100 / cote).
 - **Contrôle de la base à tout moment** : `npm run db:verifier -- <chemin>` (lecture seule, code de sortie non nul en cas de problème).
 
+## 11. Économie commune avec le poker (mode banque)
+
+À faire **après** la migration ci-dessus, et seulement quand le poker expose son API interne de banque. Le contrat complet est dans `/tmp/economie-commune/CONTRAT.md` (ou chez l'orchestrateur).
+
+- **Variables** : `BANQUE_URL=http://poker:8497` (déjà dans `deploy/compose.yaml`, les deux conteneurs sont sur le réseau `npm_default`) et `BANQUE_SECRET`, **identique** à `POKER_BANQUE_SECRET` côté poker. `BANQUE_SECRET` va dans `gamble.env` (0600, hors dépôt, déjà chargé en `env_file` facultatif). Ne jamais afficher, consigner ni commiter sa valeur. Le mode banque n'est actif que si les **deux** variables sont définies : sans le secret, le site reste en autonome.
+- **Ordre de déploiement** : 1) poker (avec l'API `/interne/banque/` et son secret) ; 2) réinitialisation unique des soldes poker (script poker, lancé par l'orchestrateur, pas par toi) ; 3) paris, avec `BANQUE_SECRET` dans `gamble.env`. Déployer le paris avant le poker donnerait « Le poker ne répond pas » aux connexions.
+- **Schéma** : deux tables additives créées au démarrage, `comptes_banque` et `banque_en_attente`. Aucune colonne ni contrainte existante ne change : l'ancienne version tourne toujours sur la base (rollback inchangé, mais en mode autonome les soldes reviennent aux miroirs locaux).
+- **Effets visibles** : les sessions de comptes non liés sont fermées (il faut se reconnecter ; la connexion migre l'ancien compte vers le poker). Les marchés ouverts restent ; un gain ou un remboursement sur une mise d'avant la bascule est versé à la banque si le membre est lié, sinon crédité localement comme avant.
+- **Vérification** après bascule : `docker logs gamble` affiche « mode banque » au démarrage ; une connexion avec un compte poker fonctionne ; `sqlite3 donnees/oddsroom.sqlite "SELECT cle, essais, derniere_erreur FROM banque_en_attente WHERE essais >= 0"` est vide en régime normal (des lignes qui persistent avec `essais` croissant = la banque refuse ou ne répond pas : à signaler, ne pas les supprimer).
+- **Retour en autonome** : retirer `BANQUE_SECRET` de `gamble.env` et redémarrer. Les mouvements encore en file restent dans `banque_en_attente` et repartiront au prochain passage en mode banque.
+
 ## Ce que l'agent ne doit pas faire
 
 - Ne jamais supprimer, déplacer ou écraser `data/` ni le fichier `DB_PATH` et ses `-wal` / `-shm` (pas de `rm -rf data`, pas de `git clean -x`, pas de `git reset --hard` sur le dossier de production, pas de `rsync --delete` qui l'inclurait).
 - Ne jamais lancer `scripts/seed-demo.js` sur la production ni sur une copie qu'on pourrait confondre avec elle : c'est un script de développement qui crée de faux comptes.
 - Ne jamais copier le seul fichier `.sqlite` d'une base en WAL pendant que le service tourne ; utiliser `.backup` ou arrêter le service.
 - Ne jamais démarrer le serveur de test sur la base de production, ni avec les variables VAPID de production sur une copie.
-- Ne jamais modifier ni régénérer `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY`, `VAPID_SUBJECT`, ni afficher ou consigner leurs valeurs (cette consigne vaut aussi pour `DEPLOY_TOKEN`).
+- Ne jamais modifier ni régénérer `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY`, `VAPID_SUBJECT`, ni afficher ou consigner leurs valeurs (cette consigne vaut aussi pour `DEPLOY_TOKEN` et `BANQUE_SECRET`).
 - Ne jamais pousser, fusionner sur `main` ni déclencher le webhook de déploiement sans l'accord explicite de l'utilisateur.
 - Ne jamais commiter une sauvegarde, une copie de base ou un fichier d'environnement.
 - Ne jamais créer de comptes, de marchés ou de mises de test en production.

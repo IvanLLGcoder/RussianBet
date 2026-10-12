@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { request } from './api';
-import type { Market, MarketValues, User } from './api';
+import type { Market, MarketValues, Me, User, Verse } from './api';
 import { Header, MobileTabs, Toasts, type Feed, type Toast } from './components/Chrome';
 import { AuthModal, HowItWorksModal, InviteModal, MarketFormModal, NotificationsModal, type AuthMode } from './components/Modals';
 import { cents, credits, marketState, payout } from './format';
@@ -22,6 +22,9 @@ function initialTheme(): Theme {
 export default function App() {
   const route = useRoute();
   const [user, setUser] = useState<User | null>(null);
+  const [banque, setBanque] = useState(false);
+  const [soldeDepart, setSoldeDepart] = useState(1000);
+  const [admin, setAdmin] = useState(false);
   const [markets, setMarkets] = useState<Market[]>([]);
   const [loading, setLoading] = useState(true);
   const [networkError, setNetworkError] = useState('');
@@ -44,6 +47,11 @@ export default function App() {
     window.setTimeout(() => setToasts((current) => current.filter((toast) => toast.id !== id)), 5000);
   }, []);
 
+  // Un toast par versement de la banque (ex. « +250 jetons — Allocation du jour »).
+  const notifyVerse = useCallback((verse?: Verse[]) => {
+    for (const entry of verse ?? []) notify(`+${credits(entry.montant)}`, entry.motif);
+  }, [notify]);
+
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
     document.querySelector('meta[name="theme-color"]')?.setAttribute('content', theme === 'dark' ? '#15191e' : '#ffffff');
@@ -51,8 +59,12 @@ export default function App() {
 
   const refresh = useCallback(async () => {
     try {
-      const me = await request<{ user: User | null }>('/api/me');
+      const me = await request<Me>('/api/me');
       setUser(me.user);
+      setBanque(me.banque ?? false);
+      setSoldeDepart(me.soldeDepart ?? 1000);
+      setAdmin(me.admin ?? false);
+      notifyVerse(me.verse);
       if (!me.user) {
         setMarkets([]);
         // Ouvre la feuille d'inscription une seule fois : le rafraîchissement périodique ne doit pas la rouvrir.
@@ -69,7 +81,7 @@ export default function App() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [notifyVerse]);
 
   useEffect(() => {
     void refresh();
@@ -83,14 +95,15 @@ export default function App() {
 
   async function handleAuth(mode: AuthMode, values: Record<string, string>) {
     const payload = mode === 'register' ? values : { identity: values.identity, password: values.password };
-    const result = await request<{ user: User }>(mode === 'register' ? '/api/auth/register' : '/api/auth/login', {
+    const result = await request<{ user: User; verse?: Verse[] }>(mode === 'register' ? '/api/auth/register' : '/api/auth/login', {
       method: 'POST',
       body: JSON.stringify(payload),
     });
     if (new URLSearchParams(window.location.search).has('invite')) window.history.replaceState(null, '', window.location.pathname);
     setUser(result.user);
     setAuthMode(null);
-    notify(mode === 'register' ? `Bienvenue, ${result.user.username} !` : 'Connecté', mode === 'register' ? '1 000 crédits ont été ajoutés à votre solde.' : undefined);
+    notify(mode === 'register' ? `Bienvenue, ${result.user.username} !` : 'Connecté', mode === 'register' ? `${credits(soldeDepart)} offerts.` : undefined);
+    notifyVerse(result.verse);
     await refresh();
   }
 
@@ -153,12 +166,13 @@ export default function App() {
 
   let page: React.ReactNode;
   if (loading) page = <main className="page"><div className="page-loading" /></main>;
-  else if (!user) page = <Landing onAuth={setAuthMode} />;
+  else if (!user) page = <Landing onAuth={setAuthMode} soldeDepart={soldeDepart} />;
   else if (route.name === 'market') {
     page = (
       <MarketPage
         id={route.id}
         user={user}
+        admin={admin}
         now={now}
         version={version}
         onTrade={trade}
@@ -169,7 +183,7 @@ export default function App() {
         notify={notify}
       />
     );
-  } else if (route.name === 'portfolio') page = <Portfolio user={user} markets={markets} now={now} />;
+  } else if (route.name === 'portfolio') page = <Portfolio user={user} markets={markets} now={now} soldeDepart={soldeDepart} />;
   else if (route.name === 'leaderboard') page = <Leaderboard user={user} version={version} />;
   else page = <Home markets={markets} now={now} feed={feed} query={query} onCreate={openCreate} />;
 
@@ -177,6 +191,7 @@ export default function App() {
     <div className="app">
       <Header
         user={user}
+        banque={banque}
         markets={markets}
         portfolioValue={portfolioValue}
         route={route}
@@ -206,6 +221,8 @@ export default function App() {
       {authMode && (
         <AuthModal
           mode={authMode}
+          banque={banque}
+          soldeDepart={soldeDepart}
           initialInviteCode={new URLSearchParams(window.location.search).get('invite') ?? ''}
           onModeChange={setAuthMode}
           onClose={() => setAuthMode(null)}
@@ -215,7 +232,7 @@ export default function App() {
       {createOpen && <MarketFormModal onClose={() => setCreateOpen(false)} onCreate={create} />}
       {inviteOpen && <InviteModal onClose={() => setInviteOpen(false)} />}
       {notificationsOpen && <NotificationsModal onClose={() => setNotificationsOpen(false)} />}
-      {helpOpen && <HowItWorksModal onClose={() => setHelpOpen(false)} />}
+      {helpOpen && <HowItWorksModal banque={banque} soldeDepart={soldeDepart} onClose={() => setHelpOpen(false)} />}
       <Toasts toasts={toasts} onDismiss={(id) => setToasts((current) => current.filter((toast) => toast.id !== id))} />
     </div>
   );

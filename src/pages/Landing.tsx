@@ -1,13 +1,14 @@
 import { ArrowRight, BadgeCheck, LineChart, Wallet } from 'lucide-react';
 import { Gauge, MarketIcon } from '../components/Bits';
 import { Wordmark } from '../components/Logo';
+import { credits } from '../format';
 
 // Page d'accueil des visiteurs : l'API des marchés est réservée aux membres, on montre donc un aperçu statique.
-export function Landing({ onAuth }: { onAuth: (mode: 'login' | 'register') => void }) {
+export function Landing({ onAuth, soldeDepart }: { onAuth: (mode: 'login' | 'register') => void; soldeDepart: number }) {
   const sample = [
-    { title: 'Le prochain apéro tombe-t-il un vendredi ?', chance: 0.73, volume: '12,4 k cr' },
-    { title: 'Qui gagne le tournoi de FIFA du mois ?', chance: 0.41, volume: '8 210 cr' },
-    { title: 'Le serveur tombe-t-il avant dimanche ?', chance: 0.18, volume: '3 050 cr' },
+    { title: 'Le prochain apéro tombe-t-il un vendredi ?', chance: 0.73, volume: '12,4 k jetons' },
+    { title: 'Qui gagne le tournoi de FIFA du mois ?', chance: 0.41, volume: '8 210 jetons' },
+    { title: 'Le serveur tombe-t-il avant dimanche ?', chance: 0.18, volume: '3 050 jetons' },
   ];
   return (
     <main className="page landing">
@@ -33,7 +34,7 @@ export function Landing({ onAuth }: { onAuth: (mode: 'login' | 'register') => vo
       </section>
       <section className="landing-steps">
         <div><LineChart size={22} /><strong>Des probabilités en direct</strong><p>Chaque prise fait bouger le prix. 62¢ = 62 % de chances selon la bande.</p></div>
-        <div><Wallet size={22} /><strong>1 000 crédits pour démarrer</strong><p>Des crédits virtuels, sans dépôt ni retrait. Seule la gloire est réelle.</p></div>
+        <div><Wallet size={22} /><strong>{credits(soldeDepart)} pour démarrer</strong><p>Des jetons virtuels, sans dépôt ni retrait. Seule la gloire est réelle.</p></div>
         <div><BadgeCheck size={22} /><strong>Une cote verrouillée</strong><p>Votre cote est figée au moment de l’ordre et payée à la résolution.</p></div>
       </section>
     </main>

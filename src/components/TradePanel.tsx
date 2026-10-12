@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { CheckCircle2, Clock3, LockKeyhole, Undo2 } from 'lucide-react';
+import { CheckCircle2, Clock3, Crown, LockKeyhole, Undo2 } from 'lucide-react';
 import type { Market, User } from '../api';
 import { cents, credits, isBinary, marketState, outcomeColor, payout, signed } from '../format';
 
@@ -11,6 +11,7 @@ export function TradePanel({
   onSelect,
   onTrade,
   onSignIn,
+  isCreator = false,
 }: {
   market: Market;
   user: User | null;
@@ -19,6 +20,7 @@ export function TradePanel({
   onSelect: (index: number) => void;
   onTrade: (choiceIndex: number, amount: number) => Promise<void>;
   onSignIn: () => void;
+  isCreator?: boolean;
 }) {
   const [amount, setAmount] = useState('');
   const [reviewing, setReviewing] = useState(false);
@@ -115,6 +117,8 @@ export function TradePanel({
         <p className="ticket-note">{state === 'awaiting' ? <><Clock3 size={13} /> Prises closes, en attente du résultat.</> : <><LockKeyhole size={13} /> Position définitive jusqu’à la résolution.</>}</p>
       </div>
     );
+  } else if (isCreator && state === 'open') {
+    body = <div className="ticket-closed"><Crown size={22} /><p>Vous avez créé ce marché : c’est vous qui le résolvez.</p></div>;
   } else if (state === 'awaiting') {
     body = <div className="ticket-closed"><Clock3 size={22} /><strong>Prises closes</strong><p>Le marché est terminé et attend son résultat.</p></div>;
   } else if (!user) {
@@ -142,9 +146,9 @@ export function TradePanel({
                 setReviewing(false);
                 setAmount(event.target.value.replace(/\D/g, '').slice(0, 6));
               }}
-              aria-label="Montant en crédits"
+              aria-label="Montant en jetons"
             />
-            <span>cr</span>
+            <span>jetons</span>
           </span>
         </label>
         <div className="ticket-chips">

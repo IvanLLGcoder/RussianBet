@@ -31,6 +31,7 @@ function OutcomeTag({ market, index }: { market: Market; index: number }) {
 export function MarketPage({
   id,
   user,
+  admin,
   now,
   version,
   onTrade,
@@ -42,6 +43,7 @@ export function MarketPage({
 }: {
   id: string;
   user: User | null;
+  admin: boolean;
   now: number;
   version: number;
   onTrade: (market: Market, choiceIndex: number, amount: number) => Promise<void>;
@@ -115,6 +117,7 @@ export function MarketPage({
   const change = binary && dayAgo ? probabilities[0] - dayAgo.p[0] : 0;
   const ranked = market.options.map((option, index) => ({ option, index })).sort((a, b) => probabilities[b.index] - probabilities[a.index]);
   const isCreator = user?.id === market.creatorId;
+  const canResolve = isCreator || admin;
   const refresh = () => setReload((value) => value + 1);
 
   function openTicket(index: number) {
@@ -186,7 +189,7 @@ export function MarketPage({
                       <span>{option}<small>{compactCredits(market.optionStats[index].staked)} Vol. · {market.optionStats[index].count} prise{market.optionStats[index].count > 1 ? 's' : ''}</small></span>
                     </span>
                     <strong>{won ? <Check size={18} /> : percent(probabilities[index])}</strong>
-                    {state === 'open' && !market.myBet ? (
+                    {state === 'open' && !market.myBet && !isCreator ? (
                       <button className={`buy-pill${selected === index ? ' active' : ''}`} onClick={(event) => { event.stopPropagation(); setSelected(index); }}>
                         Acheter {cents(market.optionStats[index].odds)}
                       </button>
@@ -206,10 +209,11 @@ export function MarketPage({
               onSelect={setSelected}
               onTrade={async (choice, amount) => { await onTrade(market, choice, amount); refresh(); }}
               onSignIn={onSignIn}
+              isCreator={isCreator}
             />
           </div>
 
-          {state === 'open' && !market.myBet && !ticketVisible && (
+          {state === 'open' && !market.myBet && !isCreator && !ticketVisible && (
             <div className="mobile-buy-bar">
               {binary ? market.options.map((option, index) => (
                 <button key={option} className={`btn ${index === 0 ? 'btn-yes' : 'btn-no'}`} onClick={() => openTicket(index)}>
@@ -223,7 +227,7 @@ export function MarketPage({
             </div>
           )}
 
-          {(state === 'open' || state === 'awaiting') && user && (
+          {(state === 'open' || state === 'awaiting') && canResolve && (
             <ResolutionBox
               market={market}
               open={state === 'awaiting'}
@@ -236,7 +240,7 @@ export function MarketPage({
           <section className="rules">
             <h2>Règles</h2>
             <p>{market.description || `Ce marché se résout selon l’issue réelle de la question « ${market.title} ».`}</p>
-            <p className="rules-meta">Clôture le {dateTime(market.endsAt)} · créé par @{market.creator} le {shortDate(market.createdAt)}</p>
+            <p className="rules-meta">Clôture le {dateTime(market.endsAt)} · créé par @{market.creator} le {shortDate(market.createdAt)} · résolu par son créateur</p>
           </section>
 
           <section className="tabs-section">
@@ -293,6 +297,7 @@ export function MarketPage({
             onSelect={setSelected}
             onTrade={async (choice, amount) => { await onTrade(market, choice, amount); refresh(); }}
             onSignIn={onSignIn}
+            isCreator={isCreator}
           />
           {market.myBet && state !== 'cancelled' && (
             <div className="side-note">
@@ -347,7 +352,7 @@ function ResolutionBox({
   return (
     <details className="resolution" open={open}>
       <summary><h2>Résoudre le marché</h2>{open && <span className="resolution-hint">Prises closes : quel est le résultat ?</span>}</summary>
-      <p className="muted">N’importe quel membre peut résoudre. Les gagnants sont payés aussitôt ; la décision est définitive.</p>
+      <p className="muted">Les gagnants sont payés aussitôt ; la décision est définitive.</p>
       <div className="chip-row">
         {market.options.map((option, index) => (
           <button key={option} className={`chip${choice === index ? ' active' : ''}`} onClick={() => { setChoice(index); setConfirming(null); }}>{option}</button>

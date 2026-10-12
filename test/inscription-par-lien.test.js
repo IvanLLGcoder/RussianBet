@@ -180,7 +180,7 @@ test('aucune réponse de l’API ne contient d’adresse e-mail', async () => {
   });
   assert.equal(marche.status, 201, JSON.stringify(marche.data));
   const marketId = marche.data.id;
-  assert.equal((await call(`/api/markets/${marketId}/bets`, { cookie: alice, body: { choiceIndex: 0, amount: 10 } })).status, 200);
+  assert.equal((await call(`/api/markets/${marketId}/bets`, { cookie: state.carol, body: { choiceIndex: 0, amount: 10 } })).status, 200);
   assert.equal((await call(`/api/markets/${marketId}/bets`, { cookie: bob, body: { choiceIndex: 1, amount: 20 } })).status, 200);
   assert.equal((await call(`/api/markets/${marketId}/comments`, { cookie: bob, body: { body: 'Allez Bob' } })).status, 201);
 

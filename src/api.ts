@@ -1,4 +1,7 @@
+import { withBase } from './router';
 export type User = { id: number; username: string; balance: number };
+export type Verse = { motif: string; montant: number };
+export type Me = { user: User | null; banque: boolean; soldeDepart: number; admin: boolean; verse: Verse[] };
 export type Leader = User & { wins: number; volume: number; positions: number; inPlay: number; pnl: number };
 export type Invite = { code: string; expiresAt: string; redeemedCount: number };
 export type InvitePreview = { valid: boolean; inviter: string | null };
@@ -45,7 +48,7 @@ export type FeedEntry = Trade & { marketId: string; marketTitle: string; outcome
 export type MarketValues = { title: string; description: string; category: string; endsAt: string };
 
 export async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
-  const response = await fetch(path, {
+  const response = await fetch(path.startsWith('/') ? withBase(path) : path, {
     ...options,
     headers: { 'Content-Type': 'application/json', ...options.headers },
   });

@@ -137,10 +137,11 @@ test('l\'ancien serveur (41d60ea) sert une base créée par le nouveau, et réci
     }));
 
     // 1. Le NOUVEAU serveur crée la base et y met des données, commentaire compris.
+    //    (Un créateur ne mise pas sur son propre marché : chacun mise sur le marché de l'autre.)
     const nouveau = await launch(nouveauScript);
     const alice = await register(nouveau, 'alice');
     const bob = await register(nouveau, 'bob');
-    const binary = await nouveau.call('/api/markets', { cookie: alice, body: market('Le tournoi a-t-il lieu samedi ?', ['Oui', 'Non'], 'Sports') });
+    const binary = await nouveau.call('/api/markets', { cookie: bob, body: market('Le tournoi a-t-il lieu samedi ?', ['Oui', 'Non'], 'Sports') });
     const triple = await nouveau.call('/api/markets', { cookie: alice, body: market('Qui paie la tournée ?', ['Alice', 'Bob', 'Carol'], 'Culture') });
     assert.equal(binary.status, 201);
     assert.equal(triple.status, 201);
@@ -169,11 +170,11 @@ test('l\'ancien serveur (41d60ea) sert une base créée par le nouveau, et réci
     }
     assert.equal((await ancien.call('/api/leaderboard', { cookie: alice })).status, 200);
 
-    // L'ancien serveur peut aussi écrire : une mise, un nouveau marché, un nouveau membre.
-    assert.equal((await ancien.call(`/api/markets/${binary.data.id}/bets`, { cookie: bob, body: { choiceIndex: 1, amount: 25 } })).status, 200);
+    // L'ancien serveur peut aussi écrire : un nouveau membre, une mise, un nouveau marché.
+    const carol = await register(ancien, 'carol');
+    assert.equal((await ancien.call(`/api/markets/${binary.data.id}/bets`, { cookie: carol, body: { choiceIndex: 1, amount: 25 } })).status, 200);
     const cree = await ancien.call('/api/markets', { cookie: bob, body: market('Marché créé par l\'ancienne version', ['Pour', 'Contre'], 'Technology') });
     assert.equal(cree.status, 201);
-    await register(ancien, 'carol');
     await ancien.stop();
 
     // 3. Retour sur le NOUVEAU serveur : tout ce que l'ancien a écrit est visible, les commentaires aussi.
@@ -184,10 +185,14 @@ test('l\'ancien serveur (41d60ea) sert une base créée par le nouveau, et réci
     assert.equal(duAncien.category, 'Technology');
     assert.equal(duAncien.commentsCount, 0);
     const fiche = (await retour.call(`/api/markets/${binary.data.id}`, { cookie: alice })).data;
-    assert.equal(fiche.history.length, 3, 'création + mise d\'alice + mise de bob (posée via l\'ancien serveur)');
-    assert.deepEqual(fiche.holders[1], [{ username: 'bob', amount: 25, odds: 3, payout: 75 }]);
+    assert.equal(fiche.history.length, 3, 'création + mise d\'alice + mise de carol (posée via l\'ancien serveur)');
+    assert.deepEqual(fiche.holders[1], [{ username: 'carol', amount: 25, odds: 3, payout: 75 }]);
     assert.equal(fiche.comments.length, 1);
-    assert.equal((await retour.call('/api/me', { cookie: bob })).data.user.balance, 1000 - 30 - 25);
+    assert.equal((await retour.call('/api/me', { cookie: bob })).data.user.balance, 1000 - 30);
+    // Résolution réservée au créateur, y compris pour un marché dont la mise vient de l'ancien serveur.
+    assert.equal((await retour.call(`/api/markets/${binary.data.id}/resolve`, { cookie: alice, body: { outcomeIndex: 1 } })).status, 403);
+    assert.equal((await retour.call(`/api/markets/${binary.data.id}/resolve`, { cookie: bob, body: { outcomeIndex: 1 } })).status, 200);
+    assert.equal((await retour.call('/api/me', { cookie: carol })).data.user.balance, 1000 - 25 + 75);
     await retour.stop();
 
     // 4. Le script de vérification valide la base ainsi passée d'une version à l'autre.

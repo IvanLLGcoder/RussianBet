@@ -41,7 +41,7 @@ export function Leaderboard({ user, version }: { user: User; version: number }) 
                 <tr key={leader.id} className={leader.id === user.id ? 'me' : ''}>
                   <td><span className={`rank rank-${index + 1}`}>{index + 1}</span></td>
                   <td><span className="leader-name"><Avatar name={leader.username} size={30} />{leader.username}{leader.id === user.id && <small>vous</small>}</span></td>
-                  <td className={`col-pnl ${leader.pnl >= 0 ? 'text-yes' : 'text-no'}`}>{signed(leader.pnl)} cr</td>
+                  <td className={`col-pnl ${leader.pnl >= 0 ? 'text-yes' : 'text-no'}`}>{signed(leader.pnl)} jetons</td>
                   <td className="col-volume">{credits(leader.volume)}</td>
                   <td className="col-wins">{leader.wins} / {leader.positions}</td>
                   <td className="col-balance">{credits(leader.balance)}</td>

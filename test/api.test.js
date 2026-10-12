@@ -248,12 +248,12 @@ test('members create markets, place one wager, and receive the correct payout', 
   const initialMultichoice = initialMarkets.data.markets.find((market) => market.id === multichoiceResponse.data.id);
   assert.deepEqual(initialMultichoice.optionStats.map((option) => option.odds), [3, 3, 3]);
 
+  // Le créateur résout son marché : il ne peut donc pas miser dessus.
   const makerBet = await call(`/api/markets/${marketResponse.data.id}/bets`, {
     cookie: creator.cookie,
     body: { choiceIndex: 0, amount: 10 },
   });
-  assert.equal(makerBet.status, 200);
-  assert.equal(makerBet.data.user.balance, 990);
+  assert.equal(makerBet.status, 403);
 
   const bettor = await call('/api/auth/register', {
     body: {
@@ -285,6 +285,12 @@ test('members create markets, place one wager, and receive the correct payout', 
     },
   });
   assert.equal(secondInvitee.status, 201);
+  const firstBet = await call(`/api/markets/${marketResponse.data.id}/bets`, {
+    cookie: secondInvitee.cookie,
+    body: { choiceIndex: 0, amount: 10 },
+  });
+  assert.equal(firstBet.status, 200);
+  assert.equal(firstBet.data.user.balance, 990);
   const listedInvites = await call('/api/invites', { cookie: creator.cookie });
   assert.equal(listedInvites.data.invites[0].redeemedCount, 2);
 
@@ -326,8 +332,14 @@ test('members create markets, place one wager, and receive the correct payout', 
   });
   assert.equal(duplicateBet.status, 409);
 
-  const resolved = await call(`/api/markets/${marketResponse.data.id}/resolve`, {
+  // Seul le créateur peut résoudre.
+  const forbiddenResolve = await call(`/api/markets/${marketResponse.data.id}/resolve`, {
     cookie: bettor.cookie,
+    body: { outcomeIndex: 1 },
+  });
+  assert.equal(forbiddenResolve.status, 403);
+  const resolved = await call(`/api/markets/${marketResponse.data.id}/resolve`, {
+    cookie: creator.cookie,
     body: { outcomeIndex: 0 },
   });
   assert.equal(resolved.status, 200);
@@ -335,8 +347,10 @@ test('members create markets, place one wager, and receive the correct payout', 
   const updatedBalance = await call('/api/me', { cookie: bettor.cookie });
   assert.equal(updatedBalance.data.user.balance, 1062);
 
+  const firstBettorBalance = await call('/api/me', { cookie: secondInvitee.cookie });
+  assert.equal(firstBettorBalance.data.user.balance, 1010);
   const creatorBalance = await call('/api/me', { cookie: creator.cookie });
-  assert.equal(creatorBalance.data.user.balance, 1010);
+  assert.equal(creatorBalance.data.user.balance, 1000);
 
   const markets = await call('/api/markets', { cookie: bettor.cookie });
   const resolvedMarket = markets.data.markets.find((market) => market.id === marketResponse.data.id);
@@ -362,7 +376,7 @@ test('members create markets, place one wager, and receive the correct payout', 
   });
   assert.equal(cancelableMarket.status, 201);
   const creatorPick = await call(`/api/markets/${cancelableMarket.data.id}/bets`, {
-    cookie: creator.cookie,
+    cookie: secondInvitee.cookie,
     body: { choiceIndex: 0, amount: 30 },
   });
   const callerPick = await call(`/api/markets/${cancelableMarket.data.id}/bets`, {
@@ -385,7 +399,9 @@ test('members create markets, place one wager, and receive the correct payout', 
   assert.equal(cancelled.status, 200);
   assert.equal(cancelled.data.refundedCredits, 70);
   assert.equal(cancelled.data.refundedCallers, 2);
-  assert.equal(cancelled.data.user.balance, creatorPick.data.user.balance + 30);
+  assert.equal(cancelled.data.user.balance, creatorBalance.data.user.balance);
+  const refundedFirstBettor = await call('/api/me', { cookie: secondInvitee.cookie });
+  assert.equal(refundedFirstBettor.data.user.balance, creatorPick.data.user.balance + 30);
   const refundedCaller = await call('/api/me', { cookie: bettor.cookie });
   assert.equal(refundedCaller.data.user.balance, callerPick.data.user.balance + 40);
 
