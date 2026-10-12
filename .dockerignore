@@ -1,0 +1,22 @@
+# Exclus de l'image Docker ET du rsync de deploy/deployer.sh (--exclude-from).
+# Les motifs commençant par « / » sont ancrés à la racine du projet.
+/node_modules
+/dist
+/data
+/test
+/deploy
+/.git
+/.github
+/.gitignore
+/tsconfig.tsbuildinfo
+/README.md
+/MIGRATION*
+/LICENSE
+*.log
+.env
+.env.*
+*.env
+.DS_Store
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm

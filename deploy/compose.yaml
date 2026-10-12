@@ -1,0 +1,25 @@
+# DUyka PARIS — déployé dans /home/evg/ivan/gamble/ (derrière Nginx Proxy Manager)
+# Aucun port publié sur l'hôte : NPM joint le conteneur par son nom sur le réseau npm_default
+# (hôte proxy : http://gamble:3001).
+services:
+  gamble:
+    build: ./src
+    image: gamble:local
+    container_name: gamble
+    restart: unless-stopped
+    init: true                 # PID 1 propre : Node seul ignorerait SIGTERM (arrêt lent, puis SIGKILL)
+    environment:
+      NODE_ENV: production
+      DB_PATH: /donnees/oddsroom.sqlite
+    env_file:
+      - path: ./gamble.env     # VAPID_PUBLIC_KEY / VAPID_PRIVATE_KEY / VAPID_SUBJECT / INITIAL_INVITE_CODE (0600, hors dépôt)
+        required: false
+    volumes:
+      - ./donnees:/donnees
+    networks: [npm_default]
+    mem_limit: 384m
+    pids_limit: 256
+
+networks:
+  npm_default:
+    external: true
