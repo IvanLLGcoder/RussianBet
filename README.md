@@ -82,6 +82,7 @@ Générez une paire de clés VAPID avec `npx web-push generate-vapid-keys`, puis
 - Chaque issue affiche une cote décimale calculée à partir du nombre de prises : `(prises totales + nombre d'issues) / (prises sur l'issue + 1)`. Une prise fictive par issue au départ garde la cote définie quand le marché est vide.
 - La cote est figée au moment de la prise : les prises suivantes ne changent pas le gain. La mise est débitée immédiatement ; une prise gagnante rapporte `mise × cote figée`, en jetons entiers arrondis à l'inférieur. Les mises perdantes ne sont pas rendues.
 - Seul le créateur du marché (ou, en mode banque, un admin de la banque) désigne le résultat, à tout moment, y compris avant la clôture. La résolution est définitive et paie les gagnants.
+- **Résolution par vote** : une fois les prises closes, tout joueur connecté (parieurs compris) peut voter pour une issue (« Quel est le résultat ? »), et changer son vote tant que le marché n'est pas résolu. Dès que 3 joueurs donnent la même réponse, le marché est résolu sur cette issue, avec exactement les mêmes paiements qu'une résolution par le créateur (file banque comprise). Route : `POST /api/markets/:id/votes` (`outcomeIndex`) ; les votes sont dans la table additive `market_votes`, ignorée par l'ancienne version.
 - Les jetons n'ont aucune valeur monétaire et ne peuvent être ni déposés ni retirés.
 
 ## Économie commune avec le poker

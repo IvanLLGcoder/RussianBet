@@ -396,6 +396,10 @@ button.outcome-no:hover:not(:disabled) { background: var(--no); color: #fff; }
 .resolution-hint { color: var(--primary); font-weight: 600; font-size: 13px; }
 .resolution-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 14px; }
 .resolution-actions span { font-weight: 600; margin-right: 4px; }
+.vote-tally { margin: -4px 0 12px; color: var(--text-3); font-size: 13px; font-weight: 550; overflow-wrap: anywhere; }
+.vote-box h2 { margin: 0; font-size: 16px; }
+.vote-box .chip { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.vote-box .chip:disabled { opacity: 0.6; }
 
 .tabs { display: flex; gap: 22px; border-bottom: 1px solid var(--border); margin-bottom: 16px; overflow-x: auto; scrollbar-width: none; }
 .tabs button { padding: 10px 0; font-weight: 600; color: var(--text-3); border-bottom: 2px solid transparent; margin-bottom: -1px; white-space: nowrap; }

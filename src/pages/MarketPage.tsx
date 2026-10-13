@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { ArrowLeft, CalendarClock, Check, Link2, Pencil, TrendingDown, TrendingUp, Undo2, UsersRound } from 'lucide-react';
 import { request } from '../api';
-import type { Comment, Market, MarketDetail, MarketValues, User } from '../api';
+import type { Comment, Market, MarketDetail, MarketValues, User, Votes } from '../api';
 import { Avatar, MarketIcon } from '../components/Bits';
 import { StateBadge } from '../components/MarketCard';
 import { MarketFormModal } from '../components/Modals';
@@ -36,6 +36,7 @@ export function MarketPage({
   version,
   onTrade,
   onResolve,
+  onVote,
   onCancel,
   onEdit,
   onSignIn,
@@ -48,6 +49,7 @@ export function MarketPage({
   version: number;
   onTrade: (market: Market, choiceIndex: number, amount: number) => Promise<void>;
   onResolve: (market: Market, outcomeIndex: number) => Promise<void>;
+  onVote: (market: Market, outcomeIndex: number) => Promise<void>;
   onCancel: (market: Market) => Promise<void>;
   onEdit: (market: Market, values: MarketValues) => Promise<void>;
   onSignIn: () => void;
@@ -110,6 +112,7 @@ export function MarketPage({
   if (!detail || selected === null) return <main className="page"><div className="page-loading" /></main>;
 
   const { market, history, activity, holders, comments } = detail;
+  const votes = detail.votes ?? null;
   const state = marketState(market, now);
   const probabilities = chances(market);
   const binary = isBinary(market);
@@ -119,6 +122,11 @@ export function MarketPage({
   const isCreator = user?.id === market.creatorId;
   const canResolve = isCreator || admin;
   const refresh = () => setReload((value) => value + 1);
+  // Pas de colonne « résolu par » : un marché résolu sur une issue qui a atteint le seuil l'a été par vote.
+  const winningVotes = market.outcomeIndex !== null ? votes?.counts[market.outcomeIndex] ?? 0 : 0;
+  const resolver = state === 'resolved' && votes && winningVotes >= votes.threshold ? `résolu par vote (${winningVotes} voix)`
+    : state === 'resolved' || state === 'cancelled' ? 'résolu par son créateur'
+      : `résolu par son créateur ou par vote (${votes?.threshold ?? 3} voix)`;
 
   function openTicket(index: number) {
     setSelected(index);
@@ -231,15 +239,20 @@ export function MarketPage({
               market={market}
               open={state === 'awaiting'}
               isCreator={isCreator}
+              votes={state === 'awaiting' ? votes : null}
               onResolve={async (index) => { await onResolve(market, index); refresh(); }}
               onCancel={async () => { await onCancel(market); refresh(); }}
             />
           )}
 
+          {state === 'awaiting' && !canResolve && user && votes && (
+            <VoteBox market={market} votes={votes} onVote={async (index) => { await onVote(market, index); refresh(); }} />
+          )}
+
           <section className="rules">
             <h2>Règles</h2>
             <p>{market.description || `Ce marché se résout selon l’issue réelle de la question « ${market.title} ».`}</p>
-            <p className="rules-meta">Clôture le {dateTime(market.endsAt)} · créé par @{market.creator} le {shortDate(market.createdAt)} · résolu par son créateur</p>
+            <p className="rules-meta">Clôture le {dateTime(market.endsAt)} · créé par @{market.creator} le {shortDate(market.createdAt)} · {resolver}</p>
           </section>
 
           <section className="tabs-section">
@@ -316,16 +329,63 @@ export function MarketPage({
   );
 }
 
+function voteLabel(market: Market, votes: Votes, index: number) {
+  return `${market.options[index]} · ${votes.counts[index] ?? 0}/${votes.threshold}`;
+}
+
+// Vote des joueurs, une fois les prises closes : le 3e vote concordant résout le marché.
+function VoteBox({ market, votes, onVote }: { market: Market; votes: Votes; onVote: (index: number) => Promise<void> }) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+
+  async function vote(index: number) {
+    if (busy || votes.mine === index) return;
+    setBusy(true);
+    setError('');
+    try {
+      await onVote(index);
+    } catch (problem) {
+      setError(problem instanceof Error ? problem.message : 'Vote impossible.');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <section className="resolution vote-box">
+      <h2>Quel est le résultat ?</h2>
+      <p className="muted">Résolu automatiquement dès que {votes.threshold} joueurs donnent la même réponse.</p>
+      <div className="chip-row">
+        {market.options.map((option, index) => (
+          <button
+            key={option}
+            className={`chip${votes.mine === index ? ' active' : ''}`}
+            aria-pressed={votes.mine === index}
+            title={option}
+            disabled={busy}
+            onClick={() => void vote(index)}
+          >
+            {voteLabel(market, votes, index)}
+          </button>
+        ))}
+      </div>
+      {error && <p className="form-error" role="alert">{error}</p>}
+    </section>
+  );
+}
+
 function ResolutionBox({
   market,
   open,
   isCreator,
+  votes,
   onResolve,
   onCancel,
 }: {
   market: Market;
   open: boolean;
   isCreator: boolean;
+  votes: Votes | null;
   onResolve: (index: number) => Promise<void>;
   onCancel: () => Promise<void>;
 }) {
@@ -351,6 +411,9 @@ function ResolutionBox({
     <details className="resolution" open={open}>
       <summary><h2>Résoudre le marché</h2>{open && <span className="resolution-hint">Prises closes : quel est le résultat ?</span>}</summary>
       <p className="muted">Les gagnants sont payés aussitôt ; la décision est définitive.</p>
+      {votes && (
+        <p className="vote-tally">Votes des joueurs : {market.options.map((_, index) => voteLabel(market, votes, index)).join(' · ')}</p>
+      )}
       <div className="chip-row">
         {market.options.map((option, index) => (
           <button key={option} className={`chip${choice === index ? ' active' : ''}`} onClick={() => { setChoice(index); setConfirming(null); }}>{option}</button>

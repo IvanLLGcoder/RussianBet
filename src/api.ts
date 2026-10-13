@@ -37,13 +37,16 @@ export type HistoryPoint = { t: string; p: number[] };
 export type Trade = { id: number; username: string; choiceIndex: number; amount: number; odds: number; createdAt: string };
 export type Holder = { username: string; amount: number; odds: number; payout: number };
 export type Comment = { id: number; body: string; createdAt: string; username: string; choiceIndex?: number | null };
+export type Votes = { counts: number[]; mine: number | null; threshold: number };
 export type MarketDetail = {
   market: Market;
   history: HistoryPoint[];
   activity: Trade[];
   holders: Holder[][];
   comments: Comment[];
+  votes: Votes;
 };
+export type VoteResult = { votes: Votes; resolved: boolean; user: User };
 export type FeedEntry = Trade & { marketId: string; marketTitle: string; outcome: string };
 export type MarketValues = { title: string; description: string; category: string; endsAt: string };
 

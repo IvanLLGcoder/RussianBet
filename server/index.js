@@ -123,6 +123,19 @@ db.exec(`
   );
 `);
 
+// Résolution par vote : une voix par joueur et par marché (modifiable), table additive ignorée par
+// l'ancienne version. Dès que VOTES_RESOLUTION voix désignent la même issue, le marché est résolu.
+db.exec(`
+  CREATE TABLE IF NOT EXISTS market_votes (
+    market_id TEXT NOT NULL REFERENCES markets(id) ON DELETE CASCADE,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    choice_index INTEGER NOT NULL,
+    voted_at TEXT NOT NULL,
+    PRIMARY KEY (market_id, user_id)
+  );
+`);
+const VOTES_RESOLUTION = 3;
+
 const marketColumns = db.pragma('table_info(markets)');
 if (!marketColumns.some((column) => column.name === 'cancelled_at')) {
   db.exec('ALTER TABLE markets ADD COLUMN cancelled_at TEXT');
@@ -971,7 +984,9 @@ app.get('/api/markets/:id', requireUser, (request, response) => {
     ORDER BY market_comments.created_at DESC, market_comments.id DESC LIMIT 200
   `).all(market.id);
 
-  response.json({ market, history, activity, holders, comments });
+  response.json({
+    market, history, activity, holders, comments, votes: votesDuMarche(market.id, optionCount, request.user.id),
+  });
 });
 
 app.post('/api/markets/:id/comments', requireUser, (request, response) => {
@@ -1273,6 +1288,38 @@ function payer(userId, montant, { cle, motif }) {
   return db.prepare('UPDATE users SET balance = balance + ? WHERE id = ?').run(montant, userId).changes === 1;
 }
 
+// Résolution d'un marché, commune au créateur (ou admin banque) et au vote des joueurs. À appeler
+// DANS une transaction : statut, issue, puis gains (crédit local, ou mis en file en mode banque).
+// Après la transaction, l'appelant appelle terminerResolution (envoi à la banque, notifications).
+function resolveMarket(marketId, outcomeIndex) {
+  const market = db.prepare('SELECT * FROM markets WHERE id = ?').get(marketId);
+  if (!market) throw httpError(404, 'Marché introuvable.');
+  if (market.status === 'resolved') throw httpError(409, 'Ce marché est déjà résolu.');
+  const options = JSON.parse(market.options_json);
+  if (!Number.isInteger(outcomeIndex) || outcomeIndex < 0 || outcomeIndex >= options.length) {
+    throw httpError(400, 'Choisissez une des issues proposées.');
+  }
+  db.prepare('UPDATE markets SET status = \'resolved\', outcome_index = ? WHERE id = ?')
+    .run(outcomeIndex, market.id);
+  const winners = db.prepare('SELECT user_id, amount, decimal_odds FROM bets WHERE market_id = ? AND choice_index = ?')
+    .all(market.id, outcomeIndex);
+  for (const winner of winners) {
+    payer(winner.user_id, Math.floor(winner.amount * winner.decimal_odds), {
+      cle: `paris-gain-${market.id}`, motif: `Paris : gain — ${market.title}`,
+    });
+  }
+  return market;
+}
+
+async function terminerResolution(market) {
+  await viderFileBanque();
+  notifyPollResolved(market.id, market.title);
+}
+
+function utilisateurPublic(userId) {
+  return publicUser(db.prepare('SELECT id, username, balance FROM users WHERE id = ?').get(userId));
+}
+
 app.post('/api/markets/:id/resolve', requireUser, async (request, response) => {
   const outcomeIndex = Number(request.body.outcomeIndex);
   const target = db.prepare('SELECT creator_id FROM markets WHERE id = ?').get(request.params.id);
@@ -1281,35 +1328,68 @@ app.post('/api/markets/:id/resolve', requireUser, async (request, response) => {
   if (target.creator_id !== request.user.id && !(await estAdminBanque(request.user))) {
     return response.status(403).json({ error: 'Seul le créateur du marché peut le résoudre.' });
   }
-  let resolvedTitle;
+  let resolved;
   try {
-    db.transaction(() => {
-      const market = db.prepare('SELECT * FROM markets WHERE id = ?').get(request.params.id);
-      if (!market) throw Object.assign(new Error('Marché introuvable.'), { status: 404 });
-      if (market.status === 'resolved') throw Object.assign(new Error('Ce marché est déjà résolu.'), { status: 409 });
-      const options = JSON.parse(market.options_json);
-      if (!Number.isInteger(outcomeIndex) || outcomeIndex < 0 || outcomeIndex >= options.length) {
-        throw Object.assign(new Error('Choisissez une des issues proposées.'), { status: 400 });
-      }
-      db.prepare('UPDATE markets SET status = \'resolved\', outcome_index = ? WHERE id = ?')
-        .run(outcomeIndex, market.id);
-      const winners = db.prepare('SELECT user_id, amount, decimal_odds FROM bets WHERE market_id = ? AND choice_index = ?')
-        .all(market.id, outcomeIndex);
-      for (const winner of winners) {
-        payer(winner.user_id, Math.floor(winner.amount * winner.decimal_odds), {
-          cle: `paris-gain-${market.id}`, motif: `Paris : gain — ${market.title}`,
-        });
-      }
-      resolvedTitle = market.title;
-    })();
+    resolved = db.transaction(() => resolveMarket(request.params.id, outcomeIndex))();
   } catch (error) {
     if (error.status) return response.status(error.status).json({ error: error.message });
     console.error(error);
     return response.status(500).json({ error: 'Impossible de résoudre ce marché.' });
   }
-  await viderFileBanque();
-  notifyPollResolved(request.params.id, resolvedTitle);
-  response.json({ user: publicUser(db.prepare('SELECT id, username, balance FROM users WHERE id = ?').get(request.user.id)) });
+  await terminerResolution(resolved);
+  response.json({ user: utilisateurPublic(request.user.id) });
+});
+
+// Décompte des voix d'un marché : une case par issue, plus la voix de l'appelant.
+function votesDuMarche(marketId, optionCount, userId) {
+  const counts = new Array(optionCount).fill(0);
+  const rows = db.prepare('SELECT choice_index, COUNT(*) AS n FROM market_votes WHERE market_id = ? GROUP BY choice_index')
+    .all(marketId);
+  for (const row of rows) {
+    if (row.choice_index >= 0 && row.choice_index < optionCount) counts[row.choice_index] = row.n;
+  }
+  const mine = db.prepare('SELECT choice_index FROM market_votes WHERE market_id = ? AND user_id = ?').get(marketId, userId);
+  return { counts, mine: mine?.choice_index ?? null, threshold: VOTES_RESOLUTION };
+}
+
+// Vote de résolution : ouvert à tout joueur connecté une fois les prises closes (marché en attente
+// de résultat). Le vote qui fait atteindre le seuil résout le marché dans la même transaction.
+app.post('/api/markets/:id/votes', requireUser, async (request, response) => {
+  const outcomeIndex = Number(request.body.outcomeIndex);
+  let resolved = null;
+  let optionCount;
+  try {
+    db.transaction(() => {
+      const market = db.prepare('SELECT * FROM markets WHERE id = ?').get(request.params.id);
+      if (!market) throw httpError(404, 'Marché introuvable.');
+      if (market.cancelled_at) throw httpError(409, 'Ce marché a été annulé : il n’y a plus de vote.');
+      if (market.status === 'resolved') throw httpError(409, 'Ce marché est déjà résolu.');
+      if (Date.parse(market.ends_at) > Date.now()) {
+        throw httpError(409, 'Les prises sont encore ouvertes : le vote commence à la clôture du marché.');
+      }
+      optionCount = JSON.parse(market.options_json).length;
+      if (!Number.isInteger(outcomeIndex) || outcomeIndex < 0 || outcomeIndex >= optionCount) {
+        throw httpError(400, 'Choisissez une des issues proposées.');
+      }
+      db.prepare(`
+        INSERT INTO market_votes (market_id, user_id, choice_index, voted_at) VALUES (?, ?, ?, ?)
+        ON CONFLICT(market_id, user_id) DO UPDATE SET choice_index = excluded.choice_index, voted_at = excluded.voted_at
+      `).run(market.id, request.user.id, outcomeIndex, new Date().toISOString());
+      const { n } = db.prepare('SELECT COUNT(*) AS n FROM market_votes WHERE market_id = ? AND choice_index = ?')
+        .get(market.id, outcomeIndex);
+      if (n >= VOTES_RESOLUTION) resolved = resolveMarket(market.id, outcomeIndex);
+    })();
+  } catch (error) {
+    if (error.status) return response.status(error.status).json({ error: error.message });
+    console.error(error);
+    return response.status(500).json({ error: 'Impossible d’enregistrer votre vote.' });
+  }
+  if (resolved) await terminerResolution(resolved);
+  response.json({
+    votes: votesDuMarche(request.params.id, optionCount, request.user.id),
+    resolved: Boolean(resolved),
+    user: utilisateurPublic(request.user.id),
+  });
 });
 
 app.post('/api/markets/:id/cancel', requireUser, async (request, response) => {

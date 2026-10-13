@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { request } from './api';
-import type { Market, MarketValues, Me, User, Verse } from './api';
+import type { Market, MarketValues, Me, User, Verse, VoteResult } from './api';
 import { Header, MobileTabs, Toasts, type Feed, type Toast } from './components/Chrome';
 import { AuthModal, HowItWorksModal, InviteModal, MarketFormModal, NotificationsModal, type AuthMode } from './components/Modals';
 import { cents, credits, marketState, payout } from './format';
@@ -135,6 +135,18 @@ export default function App() {
     await refresh();
   }
 
+  // Vote de résolution : le 3e vote concordant résout le marché (mêmes gains que la résolution directe).
+  async function vote(market: Market, outcomeIndex: number) {
+    const result = await request<VoteResult>(`/api/markets/${encodeURIComponent(market.id)}/votes`, {
+      method: 'POST',
+      body: JSON.stringify({ outcomeIndex }),
+    });
+    setUser(result.user);
+    if (result.resolved) notify('Marché résolu par vote', `Résultat : ${market.options[outcomeIndex]}`);
+    else notify('Vote enregistré', `« ${market.options[outcomeIndex]} »`);
+    await refresh();
+  }
+
   async function cancel(market: Market) {
     const result = await request<{ user: User; refundedCredits: number; refundedCallers: number }>(
       `/api/markets/${encodeURIComponent(market.id)}/cancel`,
@@ -177,6 +189,7 @@ export default function App() {
         version={version}
         onTrade={trade}
         onResolve={resolve}
+        onVote={vote}
         onCancel={cancel}
         onEdit={edit}
         onSignIn={() => setAuthMode('login')}
