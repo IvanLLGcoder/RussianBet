@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import {
-  Bell, ChevronDown, Clock3, Flame, House, Info, LogOut, Moon, Plus, Search, Sparkles, Spade, Sun, Trophy, UserRoundPlus, WalletMinimal, X,
+  Bell, Check, ChevronDown, CircleAlert, Clock3, Coins, Flame, House, Info, LogOut, Moon, Plus, Search, Sparkles, Spade, Sun, Trophy, UserRoundPlus, Vote, WalletMinimal, X,
 } from 'lucide-react';
 import type { Market, User } from '../api';
 import brand from '../brand';
@@ -277,17 +277,72 @@ export function MobileTabs({ route, onCreate, onInvite }: { route: Route; onCrea
   );
 }
 
-export type Toast = { id: number; title: string; body?: string; tone?: 'success' | 'error' };
+export type ToastTone = 'success' | 'error' | 'credit' | 'info';
+export type Toast = { id: number; title: string; body?: string; tone?: ToastTone };
+
+const TOAST_DUREE = 4500;
+const toastIcons: Record<ToastTone, typeof Check> = { success: Check, error: CircleAlert, credit: Coins, info: Vote };
+
+// Un toast : icône ronde colorée, texte sur deux lignes au plus, barre de temps restant.
+// Toucher ou glisser sur le côté pour le fermer ; le survol (ordinateur) met le compte à rebours en pause.
+function ToastItem({ toast, onDismiss }: { toast: Toast; onDismiss: (id: number) => void }) {
+  const tone = toast.tone ?? 'success';
+  const Icon = toastIcons[tone];
+  const [leaving, setLeaving] = useState(false);
+  const [paused, setPaused] = useState(false);
+  const [dx, setDx] = useState(0);
+  const start = useRef<number | null>(null);
+  const remaining = useRef(TOAST_DUREE);
+  const startedAt = useRef(Date.now());
+
+  const close = () => {
+    if (leaving) return;
+    setLeaving(true);
+    window.setTimeout(() => onDismiss(toast.id), 180);
+  };
+
+  useEffect(() => {
+    if (paused || leaving) return;
+    startedAt.current = Date.now();
+    const timer = window.setTimeout(close, remaining.current);
+    return () => {
+      window.clearTimeout(timer);
+      remaining.current -= Date.now() - startedAt.current;
+    };
+  });
+
+  return (
+    <div
+      className={`toast toast-${tone}${leaving ? ' toast-leaving' : ''}${paused ? ' toast-paused' : ''}`}
+      role={tone === 'error' ? 'alert' : 'status'}
+      style={dx ? { transform: `translateX(${dx}px)`, opacity: Math.max(0, 1 - Math.abs(dx) / 160), transition: 'none' } : undefined}
+      onMouseEnter={() => setPaused(true)}
+      onMouseLeave={() => setPaused(false)}
+      onPointerDown={(event) => { start.current = event.clientX; event.currentTarget.setPointerCapture(event.pointerId); }}
+      onPointerMove={(event) => { if (start.current !== null) setDx(event.clientX - start.current); }}
+      onPointerUp={() => {
+        const moved = Math.abs(dx);
+        start.current = null;
+        setDx(0);
+        if (moved > 70 || moved < 6) close();
+      }}
+      onPointerCancel={() => { start.current = null; setDx(0); }}
+    >
+      <span className="toast-icon"><Icon size={16} strokeWidth={2.6} /></span>
+      <div className="toast-text">
+        <strong>{toast.title}</strong>
+        {toast.body && <p>{toast.body}</p>}
+      </div>
+      <X className="toast-close" size={15} aria-hidden="true" />
+      <span className="toast-timer" style={{ animationDuration: `${TOAST_DUREE}ms` }} />
+    </div>
+  );
+}
 
 export function Toasts({ toasts, onDismiss }: { toasts: Toast[]; onDismiss: (id: number) => void }) {
   return (
     <div className="toasts" aria-live="polite">
-      {toasts.map((toast) => (
-        <div className={`toast toast-${toast.tone ?? 'success'}`} key={toast.id}>
-          <div><strong>{toast.title}</strong>{toast.body && <p>{toast.body}</p>}</div>
-          <button className="icon-btn" aria-label="Fermer" onClick={() => onDismiss(toast.id)}><X size={14} /></button>
-        </div>
-      ))}
+      {toasts.map((toast) => <ToastItem key={toast.id} toast={toast} onDismiss={onDismiss} />)}
     </div>
   );
 }

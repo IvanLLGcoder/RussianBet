@@ -605,15 +605,43 @@ button.outcome-no:hover:not(:disabled) { background: var(--no); color: #fff; }
 .how-steps + .modal-fineprint { text-align: left; margin-bottom: 16px; }
 
 /* ---------- Toasts & navigation mobile ---------- */
-.toasts { position: fixed; left: 20px; bottom: 20px; z-index: 120; display: flex; flex-direction: column; gap: 8px; max-width: min(380px, calc(100vw - 40px)); }
-.toast {
-  display: flex; align-items: flex-start; gap: 10px; padding: 12px 10px 12px 14px; border-radius: 12px; background: var(--surface);
-  border: 1px solid var(--border); box-shadow: var(--shadow-lg); border-left: 4px solid var(--yes); animation: rise 0.2s ease-out;
+/* Toasts : carte flottante, pastille d'icône colorée, barre de temps restant. */
+.toasts {
+  --toast-from: translateY(14px);
+  position: fixed; right: 24px; bottom: 24px; z-index: 120; display: flex; flex-direction: column; align-items: flex-end; gap: 8px;
+  width: min(380px, calc(100vw - 32px)); pointer-events: none;
 }
-.toast-error { border-left-color: var(--no); }
-.toast > div { flex: 1; }
-.toast p { color: var(--text-2); font-size: 13px; margin-top: 2px; }
-.toast .icon-btn { width: 26px; height: 26px; }
+.toast {
+  --tone: var(--yes); --tone-soft: var(--yes-soft);
+  position: relative; overflow: hidden; width: 100%; pointer-events: auto; cursor: pointer; touch-action: pan-y; user-select: none;
+  display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 12px; padding: 12px 14px 13px 12px;
+  border-radius: 16px; border: 1px solid var(--border);
+  background: color-mix(in srgb, var(--surface) 90%, transparent); backdrop-filter: blur(18px) saturate(1.6); -webkit-backdrop-filter: blur(18px) saturate(1.6);
+  box-shadow: 0 12px 32px rgba(15, 20, 30, 0.14), 0 2px 6px rgba(15, 20, 30, 0.06);
+  animation: toast-in 0.32s cubic-bezier(0.2, 0.9, 0.3, 1.15);
+  transition: transform 0.18s ease, opacity 0.18s ease;
+}
+.toast-error { --tone: var(--no); --tone-soft: var(--no-soft); }
+.toast-credit { --tone: var(--amber); --tone-soft: var(--amber-soft); }
+.toast-info { --tone: var(--primary); --tone-soft: var(--primary-soft); }
+.toast-icon { display: grid; place-items: center; width: 34px; height: 34px; border-radius: 50%; color: var(--tone); background: var(--tone-soft); }
+.toast-text strong { display: block; font-size: 14.5px; font-weight: 650; letter-spacing: -0.01em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.toast-credit .toast-text strong { color: var(--yes); font-variant-numeric: tabular-nums; }
+.toast-text p { color: var(--text-2); font-size: 13px; line-height: 1.35; margin-top: 1px; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.toast-close { color: var(--text-3); align-self: start; margin-top: 2px; }
+.toast:hover .toast-close { color: var(--text-2); }
+.toast-timer {
+  position: absolute; left: 0; bottom: 0; height: 2.5px; width: 100%; background: var(--tone); opacity: 0.45;
+  transform-origin: left; animation: toast-timer linear forwards;
+}
+.toast-paused .toast-timer { animation-play-state: paused; }
+.toast-leaving { animation: toast-out 0.18s ease-in forwards; }
+@keyframes toast-in { from { opacity: 0; transform: var(--toast-from) scale(0.97); } }
+@keyframes toast-out { to { opacity: 0; transform: scale(0.96); } }
+@keyframes toast-timer { from { transform: scaleX(1); } to { transform: scaleX(0); } }
+@media (prefers-reduced-motion: reduce) {
+  .toast, .toast-leaving { animation: none; }
+}
 .mobile-tabs { display: none; }
 
 /* ---------- Responsive ---------- */
@@ -649,7 +677,9 @@ button.outcome-no:hover:not(:disabled) { background: var(--no); color: #fff; }
   }
   .mobile-tabs a, .mobile-tabs button { min-width: 0; display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 4px 2px; font-size: 11px; font-weight: 600; color: var(--text-3); }
   .mobile-tabs .active { color: var(--primary); }
-  .toasts { bottom: 84px; left: 12px; }
+  /* Téléphone : en haut, pleine largeur, comme une bannière système ; on touche ou on glisse pour fermer. */
+  .toasts { --toast-from: translateY(-16px); top: calc(env(safe-area-inset-top) + 10px); bottom: auto; left: 10px; right: 10px; width: auto; }
+  .toast-close { display: none; }
   .market-page { padding-bottom: 160px; }
   /* Téléphone : l'en-tête défile avec la page pour laisser l'écran au contenu ; la barre du bas suffit à naviguer. */
   .topbar { position: relative; }

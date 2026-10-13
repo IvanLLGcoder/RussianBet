@@ -3,7 +3,7 @@ import { request } from './api';
 import type { Market, MarketValues, Me, User, Verse, VoteResult } from './api';
 import { Header, MobileTabs, Toasts, type Feed, type Toast } from './components/Chrome';
 import { AuthModal, HowItWorksModal, InviteModal, MarketFormModal, NotificationsModal, type AuthMode } from './components/Modals';
-import { cents, credits, marketState, payout } from './format';
+import { credits, marketState, payout } from './format';
 import { Home } from './pages/Home';
 import { Landing } from './pages/Landing';
 import { Leaderboard } from './pages/Leaderboard';
@@ -43,13 +43,13 @@ export default function App() {
 
   const notify = useCallback((title: string, body?: string, tone: Toast['tone'] = 'success') => {
     const id = Date.now() + Math.random();
-    setToasts((current) => [...current.slice(-3), { id, title, body, tone }]);
-    window.setTimeout(() => setToasts((current) => current.filter((toast) => toast.id !== id)), 5000);
+    // La fermeture (délai, toucher, glissement) est gérée par chaque toast.
+    setToasts((current) => [...current.slice(-2), { id, title, body, tone }]);
   }, []);
 
   // Un toast par versement de la banque (ex. « +250 jetons — Allocation du jour »).
   const notifyVerse = useCallback((verse?: Verse[]) => {
-    for (const entry of verse ?? []) notify(`+${credits(entry.montant)}`, entry.motif);
+    for (const entry of verse ?? []) notify(`+${credits(entry.montant)}`, entry.motif, 'credit');
   }, [notify]);
 
   useEffect(() => {
@@ -102,7 +102,8 @@ export default function App() {
     if (new URLSearchParams(window.location.search).has('invite')) window.history.replaceState(null, '', window.location.pathname);
     setUser(result.user);
     setAuthMode(null);
-    notify(mode === 'register' ? `Bienvenue, ${result.user.username} !` : 'Connecté', mode === 'register' ? `${credits(soldeDepart)} offerts.` : undefined);
+    if (mode === 'register') notify(`Bienvenue, ${result.user.username} !`, `${credits(soldeDepart)} offerts pour commencer.`, 'credit');
+    else notify(`Content de vous revoir, ${result.user.username}`);
     notifyVerse(result.verse);
     await refresh();
   }
@@ -121,7 +122,7 @@ export default function App() {
       body: JSON.stringify({ choiceIndex, amount }),
     });
     setUser(result.user);
-    notify('Ordre exécuté', `${credits(amount)} sur « ${market.options[choiceIndex]} » à ~${cents(odds)} · gain potentiel ~${credits(payout(amount, odds))}`);
+    notify('Mise placée', `${credits(amount)} sur « ${market.options[choiceIndex]} » · gain possible ${credits(payout(amount, odds))}`);
     await refresh();
   }
 
@@ -143,7 +144,7 @@ export default function App() {
     });
     setUser(result.user);
     if (result.resolved) notify('Marché résolu par vote', `Résultat : ${market.options[outcomeIndex]}`);
-    else notify('Vote enregistré', `« ${market.options[outcomeIndex]} »`);
+    else notify('Vote enregistré', `Vous avez voté « ${market.options[outcomeIndex]} »`, 'info');
     await refresh();
   }
 

@@ -79,8 +79,10 @@ self.addEventListener('push', (event) => {
   const notification = event.data.json();
   event.waitUntil(self.registration.showNotification(notification.title, {
     body: notification.body,
-    icon: `${BASE}notification.svg`,
-    badge: `${BASE}notification.svg`,
+    // PNG : Android et Chrome n'affichent pas les icônes SVG dans les notifications.
+    icon: `${BASE}icon-192.png`,
+    badge: `${BASE}badge-96.png`,
+    renotify: true,
     tag: `${notification.type}-${notification.marketId}`,
     data: { url: notification.marketId ? `${BASE}market/${encodeURIComponent(notification.marketId)}` : BASE },
   }));

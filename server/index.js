@@ -501,28 +501,38 @@ function notifyNewPoll(market, creatorId) {
     WHERE notification_preferences.new_polls = 1 AND push_subscriptions.user_id != ?
   `).all(creatorId);
   dispatchPushNotifications(subscriptions, {
-    title: 'Nouveau marché',
+    title: 'Nouveau pari à prendre',
     body: market.title,
     marketId: market.id,
     type: 'new-poll',
   });
 }
 
-function notifyPollResolved(marketId, title) {
+// Notification personnalisée : gagnants (avec le gain), perdants, et le résultat dans tous les cas.
+function notifyPollResolved(marketId) {
   if (!pushEnabled) return;
+  const market = db.prepare('SELECT title, options_json, outcome_index FROM markets WHERE id = ?').get(marketId);
+  if (!market || market.outcome_index === null) return;
+  const outcome = JSON.parse(market.options_json)[market.outcome_index];
   const subscriptions = db.prepare(`
-    SELECT DISTINCT push_subscriptions.endpoint, push_subscriptions.p256dh, push_subscriptions.auth
+    SELECT DISTINCT push_subscriptions.endpoint, push_subscriptions.p256dh, push_subscriptions.auth,
+      bets.choice_index, bets.amount, bets.decimal_odds
     FROM push_subscriptions
     JOIN notification_preferences ON notification_preferences.user_id = push_subscriptions.user_id
     JOIN bets ON bets.user_id = push_subscriptions.user_id
     WHERE notification_preferences.participated_resolutions = 1 AND bets.market_id = ?
   `).all(marketId);
-  dispatchPushNotifications(subscriptions, {
-    title: 'Un marché où vous avez une position est résolu',
-    body: title,
-    marketId,
-    type: 'poll-resolved',
-  });
+  for (const subscription of subscriptions) {
+    const gagne = subscription.choice_index === market.outcome_index;
+    dispatchPushNotifications([subscription], {
+      title: gagne
+        ? `Gagné ! +${Math.floor(subscription.amount * subscription.decimal_odds).toLocaleString('fr-FR')} jetons`
+        : `Perdu · résultat « ${outcome} »`,
+      body: gagne ? `${market.title} → ${outcome}` : market.title,
+      marketId,
+      type: 'poll-resolved',
+    });
+  }
 }
 
 // banque / soldeDepart servent aussi aux visiteurs (feuille d'inscription : « 10 000 jetons offerts »).
@@ -1313,7 +1323,7 @@ function resolveMarket(marketId, outcomeIndex) {
 
 async function terminerResolution(market) {
   await viderFileBanque();
-  notifyPollResolved(market.id, market.title);
+  notifyPollResolved(market.id);
 }
 
 function utilisateurPublic(userId) {
