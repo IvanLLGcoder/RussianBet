@@ -39,6 +39,7 @@ export default function App() {
   const [notificationsOpen, setNotificationsOpen] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
   const [toasts, setToasts] = useState<Toast[]>([]);
+  const [connexionPoker, setConnexionPoker] = useState(false);
   const inviteLinkHandled = useRef(false);
 
   const notify = useCallback((title: string, body?: string, tone: Toast['tone'] = 'success') => {
@@ -62,6 +63,7 @@ export default function App() {
       const me = await request<Me>('/api/me');
       setUser(me.user);
       setBanque(me.banque ?? false);
+      setConnexionPoker(me.connexionPoker ?? false);
       setSoldeDepart(me.soldeDepart ?? 1000);
       setAdmin(me.admin ?? false);
       notifyVerse(me.verse);
@@ -82,6 +84,20 @@ export default function App() {
       setLoading(false);
     }
   }, [notifyVerse]);
+
+  // Retour de « Continuer avec le poker » (?poker=ok|expire|indisponible|desactive|erreur).
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const retour = params.get('poker');
+    if (!retour) return;
+    params.delete('poker');
+    const reste = params.toString();
+    window.history.replaceState(null, '', window.location.pathname + (reste ? `?${reste}` : ''));
+    if (retour === 'ok') notify('Connecté avec ton compte poker', 'Mêmes jetons sur les deux sites.');
+    else if (retour === 'indisponible') notify('Le poker ne répond pas', 'Réessaie dans un instant.', 'error');
+    else if (retour === 'desactive') notify('Compte poker désactivé', undefined, 'error');
+    else notify('Connexion par le poker interrompue', 'Réessaie, ou connecte-toi avec ton nom et ton mot de passe.', 'error');
+  }, [notify]);
 
   useEffect(() => {
     void refresh();
@@ -236,6 +252,7 @@ export default function App() {
         <AuthModal
           mode={authMode}
           banque={banque}
+          connexionPoker={connexionPoker}
           soldeDepart={soldeDepart}
           initialInviteCode={new URLSearchParams(window.location.search).get('invite') ?? ''}
           onModeChange={setAuthMode}

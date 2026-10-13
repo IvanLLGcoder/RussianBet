@@ -16,6 +16,7 @@ services:
       DB_PATH: /donnees/oddsroom.sqlite
       BASE_PATH: ""            # doit être identique à l'argument de build ci-dessus
       BANQUE_URL: http://poker:8497   # mode banque (jetons communs) : actif seulement si BANQUE_SECRET est aussi défini
+      POKER_URL_PUBLIQUE: https://poker.dyuka.com   # bouton « Continuer avec le poker » (aller-retour par /lien-paris)
     env_file:
       - path: ./gamble.env     # VAPID_* / INITIAL_INVITE_CODE / BANQUE_SECRET (0600, hors dépôt)
         required: false

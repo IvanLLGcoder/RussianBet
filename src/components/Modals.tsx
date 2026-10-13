@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Check, Copy, Minus, Plus, Share2, X } from 'lucide-react';
+import { Check, ChevronLeft, Copy, Minus, Plus, Share2, Spade, UserRound, X } from 'lucide-react';
 import { request } from '../api';
 import type { Invite, InvitePreview, Market, MarketValues, NotificationPreferences, NotificationSettings } from '../api';
 import { categories, categoryLabels, credits, dateTime, localDateTime } from '../format';
@@ -49,6 +49,7 @@ type PreviewState = { status: 'loading' } | { status: 'error' } | ({ status: 'do
 export function AuthModal({
   mode,
   banque,
+  connexionPoker,
   soldeDepart,
   initialInviteCode,
   onModeChange,
@@ -57,6 +58,7 @@ export function AuthModal({
 }: {
   mode: AuthMode;
   banque: boolean;
+  connexionPoker: boolean;
   soldeDepart: number;
   initialInviteCode: string;
   onModeChange: (mode: AuthMode) => void;
@@ -66,36 +68,65 @@ export function AuthModal({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [preview, setPreview] = useState<PreviewState>({ status: 'loading' });
+  // Lien d'invitation en mode banque : on demande d'abord « déjà au poker ? » pour ne pas créer de doublon.
+  const [etape, setEtape] = useState<'choix' | 'liste' | 'nouveau'>('choix');
+  const [noms, setNoms] = useState<string[] | null>(null);
+  const [nomsErreur, setNomsErreur] = useState('');
+  const [filtre, setFiltre] = useState('');
+  const [choisi, setChoisi] = useState('');
+  const [nomPris, setNomPris] = useState('');
   const register = mode === 'register';
   // Arrivée par un lien d'invitation : le code est caché et prérempli, seuls le nom et le mot de passe sont demandés.
   const fromLink = initialInviteCode.trim() !== '';
+  const code = initialInviteCode.trim();
 
   useEffect(() => {
     if (!fromLink) return;
     let active = true;
-    request<InvitePreview>(`/api/invites/${encodeURIComponent(initialInviteCode.trim())}`)
+    request<InvitePreview>(`/api/invites/${encodeURIComponent(code)}`)
       .then((result) => { if (active) setPreview({ status: 'done', ...result }); })
       .catch(() => { if (active) setPreview({ status: 'error' }); });
     return () => { active = false; };
-  }, [fromLink, initialInviteCode]);
+  }, [fromLink, code]);
 
-  async function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    const values = Object.fromEntries(new FormData(event.currentTarget).entries()) as Record<string, string>;
+  useEffect(() => {
+    if (etape !== 'liste' || noms !== null || !fromLink) return;
+    request<{ noms: string[] }>(`/api/invites/${encodeURIComponent(code)}/joueurs`)
+      .then((result) => setNoms(result.noms))
+      .catch((problem) => setNomsErreur(errorText(problem, 'Liste des joueurs indisponible.')));
+  }, [etape, noms, fromLink, code]);
+
+  async function envoyer(next: AuthMode, values: Record<string, string>) {
     setBusy(true);
     setError('');
+    setNomPris('');
     try {
-      await onSubmit(mode, values);
+      await onSubmit(next, values);
     } catch (problem) {
-      setError(errorText(problem, 'Connexion impossible.'));
+      const message = errorText(problem, 'Connexion impossible.');
+      // Nom déjà pris au poker : c'est probablement la même personne, on propose de se connecter.
+      if (banque && next === 'register' && /déjà pris/.test(message)) setNomPris(values.username ?? '');
+      setError(message);
     } finally {
       setBusy(false);
     }
   }
 
+  function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const values = Object.fromEntries(new FormData(event.currentTarget).entries()) as Record<string, string>;
+    void envoyer(mode, values);
+  }
+
   const switchTo = (next: AuthMode) => { onModeChange(next); setError(''); };
+  const allerA = (next: typeof etape, nom = '') => { setEtape(next); setChoisi(nom); setError(''); setNomPris(''); };
   const invalidLink = register && fromLink && preview.status === 'done' && !preview.valid;
   const inviter = preview.status === 'done' ? preview.inviter : null;
+  const parcoursPoker = register && fromLink && banque && !invalidLink;
+  const lienPoker = `${BASE}/api/auth/poker?suite=${encodeURIComponent('/')}`;
+  const boutonPoker = connexionPoker && (
+    <a className="btn btn-primary btn-block btn-poker" href={lienPoker}><Spade size={17} fill="currentColor" />Continuer avec mon compte poker</a>
+  );
 
   let head: React.ReactNode;
   if (!register) {
@@ -119,7 +150,11 @@ export function AuthModal({
       <div className="auth-head">
         <Logo size={44} />
         <h2>{inviter ? <><strong className="auth-inviter">{inviter}</strong> t’invite sur <Wordmark /></> : <>Rejoindre <Wordmark /></>}</h2>
-        <p>Choisissez un nom et un mot de passe. {credits(soldeDepart)} offerts à l’arrivée.</p>
+        <p>
+          {parcoursPoker && etape !== 'nouveau'
+            ? 'Mêmes jetons et même compte que le poker. Tu y joues déjà ?'
+            : <>Choisissez un nom et un mot de passe. {credits(soldeDepart)} offerts à l’arrivée.</>}
+        </p>
       </div>
     );
   } else {
@@ -132,6 +167,108 @@ export function AuthModal({
     );
   }
 
+  const erreurNomPris = error && (
+    <div className="form-error" role="alert">
+      {error}
+      {nomPris && <button type="button" className="btn-text auth-inline" onClick={() => allerA('liste', nomPris)}>C’est moi : me connecter</button>}
+    </div>
+  );
+
+  const filtreNorm = filtre.trim().toLocaleLowerCase('fr');
+  const nomsVisibles = (noms ?? []).filter((nom) => !filtreNorm || nom.toLocaleLowerCase('fr').includes(filtreNorm));
+
+  let corps: React.ReactNode;
+  if (invalidLink) {
+    corps = <button className="btn btn-primary btn-block" type="button" onClick={() => switchTo('login')}>Se connecter</button>;
+  } else if (parcoursPoker && etape === 'choix') {
+    corps = (
+      <div className="auth-choices">
+        {boutonPoker}
+        {boutonPoker && <p className="auth-choice-hint">Déjà connecté au poker sur cet appareil ? Un seul toucher.</p>}
+        <button className={`btn btn-block ${boutonPoker ? 'btn-ghost' : 'btn-primary'}`} type="button" onClick={() => allerA('liste')}>
+          <UserRound size={17} />Je suis au poker : choisir mon nom
+        </button>
+        <div className="auth-divider"><span>Nouveau ici ?</span></div>
+        <button className="btn btn-ghost btn-block" type="button" onClick={() => allerA('nouveau')}><Plus size={17} />Créer un compte</button>
+      </div>
+    );
+  } else if (parcoursPoker && etape === 'liste') {
+    corps = (
+      <div className="auth-names-step">
+        <button type="button" className="auth-back" onClick={() => (choisi ? setChoisi('') : allerA('choix'))}><ChevronLeft size={16} />Retour</button>
+        {choisi ? (
+          <form className="form" onSubmit={(event) => {
+            event.preventDefault();
+            const password = String(new FormData(event.currentTarget).get('password') ?? '');
+            void envoyer('login', { identity: choisi, password });
+          }}>
+            <div className="auth-me"><span className="auth-me-avatar">{choisi.slice(0, 1).toUpperCase()}</span><div><small>Connexion en tant que</small><strong>{choisi}</strong></div></div>
+            <input type="hidden" name="identity" value={choisi} autoComplete="username" />
+            <label>Mot de passe du poker<input autoFocus autoComplete="current-password" name="password" type="password" maxLength={128} required /></label>
+            {error && <p className="form-error" role="alert">{error}</p>}
+            <button className="btn btn-primary btn-block" type="submit" disabled={busy}>{busy ? 'Un instant…' : 'Se connecter'}</button>
+            {boutonPoker && <p className="auth-choice-hint">Mot de passe oublié ? Connecte-toi plutôt avec <a href={lienPoker}>ton compte poker</a>.</p>}
+          </form>
+        ) : (
+          <>
+            <p className="auth-step-title">Qui es-tu ?</p>
+            {(noms?.length ?? 0) > 8 && (
+              <input className="auth-filter" type="search" placeholder="Chercher mon nom" value={filtre} onChange={(event) => setFiltre(event.target.value)} autoCapitalize="none" autoCorrect="off" spellCheck={false} />
+            )}
+            {nomsErreur && <p className="form-error" role="alert">{nomsErreur}</p>}
+            {!noms && !nomsErreur && <p className="auth-choice-hint">Chargement des joueurs…</p>}
+            {noms && (
+              <div className="auth-names">
+                {nomsVisibles.map((nom) => (
+                  <button key={nom} type="button" onClick={() => allerA('liste', nom)}>
+                    <span className="auth-me-avatar">{nom.slice(0, 1).toUpperCase()}</span>{nom}
+                  </button>
+                ))}
+                {nomsVisibles.length === 0 && <p className="auth-choice-hint">Aucun joueur à ce nom.</p>}
+              </div>
+            )}
+          </>
+        )}
+      </div>
+    );
+  } else {
+    corps = (
+      <form className="form" onSubmit={handleSubmit}>
+        {parcoursPoker && <button type="button" className="auth-back" onClick={() => allerA('choix')}><ChevronLeft size={16} />Retour</button>}
+        {!register && boutonPoker && <>{boutonPoker}<div className="auth-divider"><span>ou</span></div></>}
+        {register ? (
+          <>
+            {fromLink
+              ? <input type="hidden" name="inviteCode" value={initialInviteCode} />
+              : <label>Code d’invitation<input autoComplete="off" autoCapitalize="characters" autoCorrect="off" spellCheck={false} name="inviteCode" placeholder="ABC123DEF456" required /></label>}
+            <label>Nom
+              <input
+                autoComplete="username"
+                autoCapitalize="none"
+                autoCorrect="off"
+                spellCheck={false}
+                name="username"
+                minLength={banque ? 2 : 3}
+                maxLength={20}
+                pattern={banque ? undefined : '[A-Za-z0-9_]{3,20}'}
+                title={banque ? '2 à 20 caractères' : '3 à 20 lettres, chiffres ou _'}
+                required
+              />
+              <span className="field-hint">{banque ? '2 à 20 caractères (lettres, accents, espaces et points acceptés) · servira aussi au poker' : '3 à 20 lettres, chiffres ou _'}</span>
+            </label>
+          </>
+        ) : (
+          <label>{banque ? 'Nom' : 'Nom ou e-mail'}<input autoComplete="username" autoCapitalize="none" autoCorrect="off" spellCheck={false} name="identity" required /></label>
+        )}
+        <label>Mot de passe<input autoComplete={register ? 'new-password' : 'current-password'} name="password" type="password" minLength={register ? (banque ? 8 : 6) : undefined} maxLength={128} placeholder={register ? `${banque ? 8 : 6} caractères minimum` : ''} required /></label>
+        {erreurNomPris}
+        <button className="btn btn-primary btn-block" type="submit" disabled={busy}>
+          {busy ? 'Un instant…' : register ? 'Créer mon compte' : 'Se connecter'}
+        </button>
+      </form>
+    );
+  }
+
   return (
     <Modal title={register ? 'Inscription' : 'Connexion'} onClose={onClose}>
       {head}
@@ -141,42 +278,8 @@ export function AuthModal({
           <button role="tab" aria-selected={register} className={register ? 'active' : ''} onClick={() => switchTo('register')}>Inscription</button>
         </div>
       )}
-      {invalidLink ? (
-        <button className="btn btn-primary btn-block" type="button" onClick={() => switchTo('login')}>Se connecter</button>
-      ) : (
-        <form className="form" onSubmit={(event) => void handleSubmit(event)}>
-          {register ? (
-            <>
-              {fromLink
-                ? <input type="hidden" name="inviteCode" value={initialInviteCode} />
-                : <label>Code d’invitation<input autoComplete="off" autoCapitalize="characters" autoCorrect="off" spellCheck={false} name="inviteCode" placeholder="ABC123DEF456" required /></label>}
-              <label>Nom
-                <input
-                  autoComplete="username"
-                  autoCapitalize="none"
-                  autoCorrect="off"
-                  spellCheck={false}
-                  name="username"
-                  minLength={banque ? 2 : 3}
-                  maxLength={20}
-                  pattern={banque ? undefined : '[A-Za-z0-9_]{3,20}'}
-                  title={banque ? '2 à 20 caractères' : '3 à 20 lettres, chiffres ou _'}
-                  required
-                />
-                <span className="field-hint">{banque ? '2 à 20 caractères (lettres, accents, espaces et points acceptés) · même nom qu’au poker' : '3 à 20 lettres, chiffres ou _'}</span>
-              </label>
-            </>
-          ) : (
-            <label>Nom ou e-mail<input autoComplete="username" autoCapitalize="none" autoCorrect="off" spellCheck={false} name="identity" required /></label>
-          )}
-          <label>Mot de passe<input autoComplete={register ? 'new-password' : 'current-password'} name="password" type="password" minLength={register ? (banque ? 8 : 6) : undefined} maxLength={128} placeholder={register ? `${banque ? 8 : 6} caractères minimum` : ''} required /></label>
-          {error && <p className="form-error" role="alert">{error}</p>}
-          <button className="btn btn-primary btn-block" type="submit" disabled={busy}>
-            {busy ? 'Un instant…' : register ? 'Créer mon compte' : 'Se connecter'}
-          </button>
-        </form>
-      )}
-      {register && fromLink && (
+      {corps}
+      {register && fromLink && !parcoursPoker && (
         <button className="auth-switch" type="button" onClick={() => switchTo('login')}>J’ai déjà un compte</button>
       )}
       <p className="modal-fineprint">Jetons virtuels uniquement : aucun dépôt, aucun retrait.</p>

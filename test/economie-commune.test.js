@@ -153,7 +153,7 @@ after(async () => {
 test('visiteur : /api/me annonce le mode banque et le solde de départ', async () => {
   const moi = await call('/api/me');
   assert.equal(moi.status, 200);
-  assert.deepEqual(moi.data, { user: null, banque: true, soldeDepart: 10_000, admin: false, verse: [] });
+  assert.deepEqual(moi.data, { user: null, banque: true, connexionPoker: false, soldeDepart: 10_000, admin: false, verse: [] });
 });
 
 test('inscription par lien : compte créé à la banque, parrain transmis, ligne locale liée', async () => {

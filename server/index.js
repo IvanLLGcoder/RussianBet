@@ -217,6 +217,8 @@ app.use(express.json({ limit: '32kb' }));
 const banqueUrl = process.env.BANQUE_URL?.trim() ?? '';
 const banqueSecret = process.env.BANQUE_SECRET?.trim() ?? '';
 const banque = banqueUrl && banqueSecret ? creerClientBanque({ url: banqueUrl, secret: banqueSecret }) : null;
+// Adresse publique du poker, pour « Continuer avec le poker » (aller-retour par sa page /lien-paris).
+const pokerPublic = banque ? (process.env.POKER_URL_PUBLIQUE ?? '').trim().replace(/\/+$/, '') : '';
 // Constantes du poker (config.py) : solde d'un nouveau compte, et le solde local historique.
 const soldeDepartBanque = 10_000;
 const soldeDepartLocal = 1000;
@@ -542,6 +544,7 @@ app.get('/api/me', async (request, response) => {
   const user = getUser(request);
   const extra = {
     banque: Boolean(banque),
+    connexionPoker: Boolean(pokerPublic),
     soldeDepart: banque ? soldeDepartBanque : soldeDepartLocal,
     admin: false,
     verse: [],
@@ -783,6 +786,69 @@ app.get('/api/invites/:code', (request, response) => {
     WHERE invite_codes.code = ? AND invite_codes.expires_at > ?
   `).get(code, new Date().toISOString());
   response.json({ valid: Boolean(invite), inviter: invite?.inviter ?? null });
+});
+
+// Noms des joueurs du poker, pour « Je suis déjà au poker » : réservé aux porteurs d'une invitation valide.
+app.get('/api/invites/:code/joueurs', async (request, response) => {
+  if (!banque) return response.status(404).json({ error: 'Indisponible.' });
+  const code = request.params.code.trim().toUpperCase();
+  const invite = db.prepare('SELECT 1 FROM invite_codes WHERE code = ? AND expires_at > ?').get(code, new Date().toISOString());
+  if (!invite) return response.status(404).json({ error: 'Ce code d’invitation est invalide ou expiré.' });
+  try {
+    const { status, data } = await banque.noms();
+    if (status !== 200) return response.status(502).json({ error: 'Liste des joueurs indisponible.' });
+    response.json({ noms: data.noms ?? [] });
+  } catch (error) {
+    if (error instanceof BanqueIndisponible) return response.status(503).json({ error: erreurBanqueInjoignable });
+    throw error;
+  }
+});
+
+// « Continuer avec le poker » : on part vers poker/lien-paris avec un état aléatoire (cookie court) ;
+// le poker, qui reconnaît sa propre session, renvoie vers /api/auth/poker/retour avec un ticket
+// à usage unique, échangé ici contre le compte via l'API interne de la banque.
+const cookieEtatPoker = 'poker_etat';
+const optionsEtatPoker = { httpOnly: true, sameSite: 'lax', secure: process.env.NODE_ENV === 'production', path: `${basePath}/api/auth/poker` };
+
+function cheminInterne(valeur) {
+  return typeof valeur === 'string' && /^\/(?![/\\])/.test(valeur) && valeur.length <= 300 ? valeur : '/';
+}
+
+app.get('/api/auth/poker', (request, response) => {
+  if (!pokerPublic) return response.redirect(302, `${basePath}/`);
+  const etat = randomBytes(24).toString('base64url');
+  response.cookie(cookieEtatPoker, JSON.stringify({ etat, suite: cheminInterne(request.query.suite) }),
+    { ...optionsEtatPoker, maxAge: 10 * 60 * 1000 });
+  response.redirect(302, `${pokerPublic}/lien-paris?etat=${etat}`);
+});
+
+app.get('/api/auth/poker/retour', async (request, response) => {
+  let attendu = null;
+  try {
+    // response.cookie encode la valeur ; getCookie la rend brute.
+    attendu = JSON.parse(decodeURIComponent(getCookie(request, cookieEtatPoker) ?? 'null'));
+  } catch {
+    attendu = null;
+  }
+  response.clearCookie(cookieEtatPoker, optionsEtatPoker);
+  const suite = cheminInterne(attendu?.suite);
+  const echec = (raison) => response.redirect(302, `${basePath}/?poker=${raison}`);
+  const etat = typeof request.query.etat === 'string' ? request.query.etat : '';
+  const ticket = typeof request.query.ticket === 'string' ? request.query.ticket : '';
+  if (!banque || !attendu?.etat || etat !== attendu.etat || !ticket) return echec('expire');
+  try {
+    const { status, data } = await banque.ticket(ticket);
+    if (status !== 200) return echec('expire');
+    if (data.actif === false) return echec('desactive');
+    const userId = await lierCompte(data);
+    setSession(response, userId);
+    const separateur = suite.includes('?') ? '&' : '?';
+    response.redirect(302, `${basePath}${suite}${separateur}poker=ok`);
+  } catch (error) {
+    if (error instanceof BanqueIndisponible) return echec('indisponible');
+    console.error(error);
+    echec('erreur');
+  }
 });
 
 app.get('/api/notifications/settings', requireUser, (request, response) => {

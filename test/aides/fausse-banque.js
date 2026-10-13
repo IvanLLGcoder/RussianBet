@@ -15,6 +15,7 @@ export async function demarrerFausseBanque({ secret = 'secret-de-test' } = {}) {
   const comptes = new Map();
   const mouvements = new Map();
   const journal = [];
+  const tickets = new Map();   // ticket → id de compte
   const etat = { panne: false, appliquerPuisCouper: 0 };
   let prochainId = 1;
 
@@ -129,6 +130,19 @@ export async function demarrerFausseBanque({ secret = 'secret-de-test' } = {}) {
       return envoyer(200, { solde: compte.solde, deja_fait: false });
     }
 
+    // Ticket de /lien-paris (« Continuer avec le poker ») : à usage unique.
+    if (requete.method === 'POST' && chemin === 'ticket') {
+      const id = tickets.get(corps.ticket);
+      tickets.delete(corps.ticket);
+      const compte = comptes.get(id);
+      if (!compte || !compte.actif) return envoyer(404, { erreur: 'Ticket invalide ou expiré' });
+      return envoyer(200, vue(compte, toucher(compte)));
+    }
+
+    if (requete.method === 'GET' && chemin === 'noms') {
+      return envoyer(200, { noms: [...comptes.values()].filter((compte) => compte.actif).map((compte) => compte.nom) });
+    }
+
     envoyer(404, { erreur: 'Route inconnue' });
   });
 
@@ -145,6 +159,12 @@ export async function demarrerFausseBanque({ secret = 'secret-de-test' } = {}) {
     journal,
     creer,
     parNom,
+    // Ce que ferait /lien-paris du poker pour un joueur connecté : un ticket à usage unique.
+    delivrerTicket(id) {
+      const ticket = `ticket-${id}-${tickets.size + 1}-${Math.random().toString(36).slice(2)}`;
+      tickets.set(ticket, id);
+      return ticket;
+    },
     // Programme un versement pour le prochain « toucher » (ex. allocation du jour).
     programmerVersement(id, motif, montant) {
       comptes.get(id).aVerser.push({ motif, montant });

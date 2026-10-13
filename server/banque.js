@@ -41,6 +41,10 @@ export function creerClientBanque({ url, secret, delaiMs = 5000 }) {
     compte: (id) => appel('GET', `comptes/${encodeURIComponent(id)}`),
     // Sans « toucher » (classement).
     comptes: (ids) => appel('GET', `comptes?ids=${ids.map(Number).join(',')}`),
+    // Ticket à usage unique délivré par /lien-paris du poker (« Continuer avec le poker »).
+    ticket: (ticket) => appel('POST', 'ticket', { ticket }),
+    // Noms des joueurs actifs du poker (« Je suis déjà au poker »).
+    noms: () => appel('GET', 'noms'),
     // Idempotent sur `cle`.
     mouvement: ({ compte, montant, motif, cle }) => appel('POST', 'mouvement', { compte, montant, motif, cle }),
   };
