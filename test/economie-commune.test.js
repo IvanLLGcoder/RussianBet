@@ -257,7 +257,7 @@ test('/api/me : touche le compte, transmet `verse` et met à jour le miroir', as
   assert.deepEqual(encore.data.verse, []);
 });
 
-test('mise : débit à la banque puis mise locale ; le créateur ne mise pas sur son marché', async () => {
+test('mise : débit à la banque puis mise locale', async () => {
   state.marche = await creerMarche(state.zoe, 'Zoé finit-elle le marathon ?');
   const cle = `paris-mise-${state.marche}-${compteDe('César D.')}`;
 
@@ -271,12 +271,6 @@ test('mise : débit à la banque puis mise locale ; le créateur ne mise pas sur
 
   const doublon = await call(`/api/markets/${state.marche}/bets`, { cookie: state.cesar, body: { choiceIndex: 1, amount: 10 } });
   assert.equal(doublon.status, 409);
-
-  const avant = banque.journal.length;
-  const createur = await call(`/api/markets/${state.marche}/bets`, { cookie: state.zoe, body: { choiceIndex: 0, amount: 10 } });
-  assert.equal(createur.status, 403);
-  assert.match(createur.data.error, /créé ce marché/);
-  assert.equal(banque.journal.length, avant, 'aucun appel à la banque');
 });
 
 test('mise : solde insuffisant à la banque', async () => {
@@ -405,4 +399,10 @@ test('classement : soldes lus à la banque, membres liés seulement ; un admin b
   banque.comptes.get(compteDe('Éloïse.B')).admin = true;
   assert.equal((await call('/api/me', { cookie: state.eloise })).data.admin, true);
   assert.equal((await call(`/api/markets/${marche}/resolve`, { cookie: state.eloise, body: { outcomeIndex: 0 } })).status, 200);
+});
+
+test('le créateur peut miser sur son propre marché', async () => {
+  const marche = await creerMarche(state.zoe, 'Le créateur peut-il miser ici ?');
+  const mise = await call(`/api/markets/${marche}/bets`, { cookie: state.zoe, body: { choiceIndex: 0, amount: 10 } });
+  assert.equal(mise.status, 200, JSON.stringify(mise.data));
 });

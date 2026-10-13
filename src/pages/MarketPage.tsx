@@ -189,7 +189,7 @@ export function MarketPage({
                       <span>{option}<small>{compactCredits(market.optionStats[index].staked)} Vol. · {market.optionStats[index].count} prise{market.optionStats[index].count > 1 ? 's' : ''}</small></span>
                     </span>
                     <strong>{won ? <Check size={18} /> : percent(probabilities[index])}</strong>
-                    {state === 'open' && !market.myBet && !isCreator ? (
+                    {state === 'open' && !market.myBet ? (
                       <button className={`buy-pill${selected === index ? ' active' : ''}`} onClick={(event) => { event.stopPropagation(); setSelected(index); }}>
                         Acheter {cents(market.optionStats[index].odds)}
                       </button>
@@ -209,11 +209,10 @@ export function MarketPage({
               onSelect={setSelected}
               onTrade={async (choice, amount) => { await onTrade(market, choice, amount); refresh(); }}
               onSignIn={onSignIn}
-              isCreator={isCreator}
             />
           </div>
 
-          {state === 'open' && !market.myBet && !isCreator && !ticketVisible && (
+          {state === 'open' && !market.myBet && !ticketVisible && (
             <div className="mobile-buy-bar">
               {binary ? market.options.map((option, index) => (
                 <button key={option} className={`btn ${index === 0 ? 'btn-yes' : 'btn-no'}`} onClick={() => openTicket(index)}>
@@ -297,7 +296,6 @@ export function MarketPage({
             onSelect={setSelected}
             onTrade={async (choice, amount) => { await onTrade(market, choice, amount); refresh(); }}
             onSignIn={onSignIn}
-            isCreator={isCreator}
           />
           {market.myBet && state !== 'cancelled' && (
             <div className="side-note">

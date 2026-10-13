@@ -1226,9 +1226,6 @@ app.post('/api/markets/:id/bets', requireUser, async (request, response) => {
   const amount = Number(request.body.amount);
   const market = db.prepare('SELECT * FROM markets WHERE id = ?').get(request.params.id);
   if (!market) return response.status(404).json({ error: 'Marché introuvable.' });
-  if (market.creator_id === request.user.id) {
-    return response.status(403).json({ error: 'Vous avez créé ce marché : vous ne pouvez pas miser dessus, c’est vous qui le résolvez.' });
-  }
   if (market.status !== 'open' || Date.parse(market.ends_at) <= Date.now()) {
     return response.status(400).json({ error: 'Ce marché n’accepte plus de prises.' });
   }

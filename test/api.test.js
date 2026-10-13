@@ -248,13 +248,6 @@ test('members create markets, place one wager, and receive the correct payout', 
   const initialMultichoice = initialMarkets.data.markets.find((market) => market.id === multichoiceResponse.data.id);
   assert.deepEqual(initialMultichoice.optionStats.map((option) => option.odds), [3, 3, 3]);
 
-  // Le créateur résout son marché : il ne peut donc pas miser dessus.
-  const makerBet = await call(`/api/markets/${marketResponse.data.id}/bets`, {
-    cookie: creator.cookie,
-    body: { choiceIndex: 0, amount: 10 },
-  });
-  assert.equal(makerBet.status, 403);
-
   const bettor = await call('/api/auth/register', {
     body: {
       username: `caller_${stamp}`,
