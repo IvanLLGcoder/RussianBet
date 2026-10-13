@@ -7,6 +7,7 @@
 /deploy
 /.git
 /.github
+/.claude
 /.gitignore
 /tsconfig.tsbuildinfo
 /README.md
