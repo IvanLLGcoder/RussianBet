@@ -6,7 +6,7 @@ services:
     build:
       context: ./src
       args:
-        BASE_PATH: /paris      # provisoire : servi sous poker.dyuka.com/paris/ (vide = racine d'un domaine dédié)
+        BASE_PATH: ""          # vide = racine du domaine (servi sur https://gamble.dyuka.com) ; ex. /paris pour un sous-chemin
     image: gamble:local
     container_name: gamble
     restart: unless-stopped
@@ -14,7 +14,7 @@ services:
     environment:
       NODE_ENV: production
       DB_PATH: /donnees/oddsroom.sqlite
-      BASE_PATH: /paris        # doit être identique à l'argument de build ci-dessus
+      BASE_PATH: ""            # doit être identique à l'argument de build ci-dessus
       BANQUE_URL: http://poker:8497   # mode banque (jetons communs) : actif seulement si BANQUE_SECRET est aussi défini
     env_file:
       - path: ./gamble.env     # VAPID_* / INITIAL_INVITE_CODE / BANQUE_SECRET (0600, hors dépôt)
